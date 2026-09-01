@@ -1,4 +1,4 @@
-module git.ccwork.com/ccwork/go/ccwork-scaffold-cli
+module github.com/GiHccTpD/ccwork-scaffold-cli
 
 go 1.25.0
 

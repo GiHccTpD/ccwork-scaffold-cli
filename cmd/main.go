@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"git.ccwork.com/ccwork/go/ccwork-scaffold-cli/internal"
+	"github.com/GiHccTpD/ccwork-scaffold-cli/internal"
 )
 
 // main 执行 ccwork-scaffold 命令行入口。
