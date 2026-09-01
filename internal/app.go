@@ -20,11 +20,11 @@ type App struct {
 	Stderr  io.Writer
 }
 
-// NewCommand 构造完整的 ccwork-scaffold 命令树。
+// NewCommand 构造完整的 ccwork-scaffold-cli 命令树。
 func NewCommand(stdout, stderr io.Writer) *cobra.Command {
 	app := &App{Stdout: stdout, Stderr: stderr}
 	root := &cobra.Command{
-		Use:           "ccwork-scaffold",
+		Use:           "ccwork-scaffold-cli",
 		Short:         "ccwork Go HTTP scaffold generator",
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -43,7 +43,7 @@ func NewCommand(stdout, stderr io.Writer) *cobra.Command {
 func (a *App) newVersionCommand() *cobra.Command {
 	return &cobra.Command{Use: "version", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		version := FetchGeneratorVersion()
-		return a.WriteReport(map[string]string{"generatorVersion": version}, "ccwork-scaffold "+version)
+		return a.WriteReport(map[string]string{"generatorVersion": version}, "ccwork-scaffold-cli "+version)
 	}}
 }
 

@@ -160,12 +160,12 @@ legacy:
 首版只提供以下六个命令：
 
 ```text
-ccwork-scaffold version
-ccwork-scaffold list
-ccwork-scaffold new
-ccwork-scaffold inspect
-ccwork-scaffold adopt
-ccwork-scaffold upgrade
+ccwork-scaffold-cli version
+ccwork-scaffold-cli list
+ccwork-scaffold-cli new
+ccwork-scaffold-cli inspect
+ccwork-scaffold-cli adopt
+ccwork-scaffold-cli upgrade
 ```
 
 不额外提供语义重叠的 `check`、`diff`、`doctor`、`sync` 或 `update`。
@@ -175,7 +175,7 @@ ccwork-scaffold upgrade
 最小调用：
 
 ```bash
-ccwork-scaffold new \
+ccwork-scaffold-cli new \
   --name order-service \
   --module git.inspur.com/ccwork/service/order-service
 ```
@@ -232,7 +232,7 @@ git diff --check
 已有项目必须显式声明来源版本，不自动猜测：
 
 ```bash
-ccwork-scaffold adopt --from v0.1.0 --profile minimal
+ccwork-scaffold-cli adopt --from v0.1.0 --profile minimal
 ```
 
 行为：
@@ -250,14 +250,14 @@ ccwork-scaffold adopt --from v0.1.0 --profile minimal
 正式升级要求显式目标：
 
 ```bash
-ccwork-scaffold upgrade --to v0.3.0 --dry-run
-ccwork-scaffold upgrade --to v0.3.0
+ccwork-scaffold-cli upgrade --to v0.3.0 --dry-run
+ccwork-scaffold-cli upgrade --to v0.3.0
 ```
 
 便利模式必须显式使用：
 
 ```bash
-ccwork-scaffold upgrade --latest
+ccwork-scaffold-cli upgrade --latest
 ```
 
 `--latest` 根据版本目录的 `defaultVersion` 解析，输出中必须展示实际目标版本和完整迁移路径。`--to` 与 `--latest` 互斥。
@@ -400,7 +400,7 @@ pendingUpgrade:
 用户完成并验证后显式确认：
 
 ```bash
-ccwork-scaffold upgrade --continue --ack regenerate-gorm
+ccwork-scaffold-cli upgrade --continue --ack regenerate-gorm
 ```
 
 全部人工动作确认后才推进正式 scaffold 版本并清理 `pendingUpgrade`。pending 状态禁止开始其它升级。

@@ -119,6 +119,25 @@ func TestResolveGeneratorVersion(t *testing.T) {
 	}
 }
 
+func TestCommandUsesExecutableName(t *testing.T) {
+	command := NewCommand(&strings.Builder{}, &strings.Builder{})
+	if got, want := command.Use, "ccwork-scaffold-cli"; got != want {
+		t.Fatalf("command.Use = %q, want %q", got, want)
+	}
+}
+
+func TestVersionUsesExecutableName(t *testing.T) {
+	var output strings.Builder
+	command := NewCommand(&output, &output)
+	command.SetArgs([]string{"version"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.TrimSpace(output.String()), "ccwork-scaffold-cli "+generatorVersion; got != want {
+		t.Fatalf("version output = %q, want %q", got, want)
+	}
+}
+
 // TestValidateRepositoryRejectsCredentials verifies source URL boundary validation.
 func TestValidateRepositoryRejectsCredentials(t *testing.T) {
 	if err := ValidateRepository("https://user:password@example.com/repo.git"); err == nil {

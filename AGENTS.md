@@ -2,7 +2,7 @@
 
 ## 项目结构与模块组织
 
-本仓库是 `ccwork-scaffold` 的 Go CLI 工具，使用 Go 1.25 和 Cobra。
+本仓库是 `ccwork-scaffold-cli` 的 Go CLI 工具，使用 Go 1.25 和 Cobra。
 
 - `main.go`：可执行程序入口。
 - `internal/cli/`：命令树、参数模型、Git 来源与缓存、项目渲染、清单和升级逻辑。
@@ -15,7 +15,7 @@
 ## 构建、测试与开发命令
 
 ```bash
-go build -o bin/ccwork-scaffold .
+go build -o bin/ccwork-scaffold-cli .
 GOCACHE=/private/tmp/ccwork-scaffold-cli-go-cache go test ./...
 go vet ./...
 gofmt -w cmd internal
