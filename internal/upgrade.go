@@ -93,7 +93,7 @@ func (a *App) Upgrade(ctx context.Context, dir, target string, latest, dryRun bo
 	}
 	manifest.Scaffold.Version = target
 	manifest.Scaffold.Revision = targetRevision
-	manifest.Generator.LastUpgradedWith = generatorVersion
+	manifest.Generator.LastUpgradedWith = FetchGeneratorVersion()
 	if err := ApplyChanges(dir, changes, manifest); err != nil {
 		return err
 	}
@@ -146,7 +146,7 @@ func (a *App) ContinueUpgrade(ctx context.Context, dir, ack string) error {
 	}
 	manifest.Scaffold.Version = release.Version
 	manifest.Scaffold.Revision = revision
-	manifest.Generator.LastUpgradedWith = generatorVersion
+	manifest.Generator.LastUpgradedWith = FetchGeneratorVersion()
 	manifest.PendingUpgrade = nil
 	if err := WriteManifest(dir, manifest); err != nil {
 		return err

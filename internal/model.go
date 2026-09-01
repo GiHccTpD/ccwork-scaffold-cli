@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -22,6 +23,20 @@ const (
 	manifestSchemaVersion  = 1
 	migrationSchemaVersion = 1
 )
+
+// FetchGeneratorVersion returns the module version embedded in the installed binary.
+// Local development builds do not include a release tag, so they use the fallback version.
+func FetchGeneratorVersion() string {
+	return ResolveGeneratorVersion(debug.ReadBuildInfo())
+}
+
+// ResolveGeneratorVersion returns the release version from Go build information.
+func ResolveGeneratorVersion(info *debug.BuildInfo, ok bool) string {
+	if ok && info != nil && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return generatorVersion
+}
 
 // ExitCode 是 CLI 对外稳定的退出码。
 type ExitCode int

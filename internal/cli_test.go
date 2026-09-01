@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -81,6 +82,40 @@ func TestCompareVersion(t *testing.T) {
 		if got := CompareVersion(test.left, test.right); got != test.want {
 			t.Errorf("CompareVersion(%q, %q)=%d, want %d", test.left, test.right, got, test.want)
 		}
+	}
+}
+
+func TestResolveGeneratorVersion(t *testing.T) {
+	tests := []struct {
+		name string
+		info *debug.BuildInfo
+		ok   bool
+		want string
+	}{
+		{
+			name: "uses module tag",
+			info: &debug.BuildInfo{Main: debug.Module{Version: "v0.0.3"}},
+			ok:   true,
+			want: "v0.0.3",
+		},
+		{
+			name: "falls back for development build",
+			info: &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}},
+			ok:   true,
+			want: generatorVersion,
+		},
+		{
+			name: "falls back without build info",
+			want: generatorVersion,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ResolveGeneratorVersion(tt.info, tt.ok); got != tt.want {
+				t.Fatalf("ResolveGeneratorVersion() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

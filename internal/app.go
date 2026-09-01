@@ -42,7 +42,8 @@ func NewCommand(stdout, stderr io.Writer) *cobra.Command {
 // newVersionCommand 创建 generator 版本命令。
 func (a *App) newVersionCommand() *cobra.Command {
 	return &cobra.Command{Use: "version", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		return a.WriteReport(map[string]string{"generatorVersion": generatorVersion}, "ccwork-scaffold "+generatorVersion)
+		version := FetchGeneratorVersion()
+		return a.WriteReport(map[string]string{"generatorVersion": version}, "ccwork-scaffold "+version)
 	}}
 }
 
@@ -156,7 +157,7 @@ func (a *App) newAdoptCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		manifest := NewManifest(name, module, profile, a.Options.Repository, from, revision, generatorVersion, !recordOnly)
+		manifest := NewManifest(name, module, profile, a.Options.Repository, from, revision, FetchGeneratorVersion(), !recordOnly)
 		if recordOnly {
 			return WriteManifest(dir, manifest)
 		}
@@ -210,7 +211,7 @@ func (a *App) FetchRelease(ctx context.Context, version string) (Release, string
 	if err != nil {
 		return Release{}, "", "", err
 	}
-	if release.MinGeneratorVersion != "" && CompareVersion(generatorVersion, release.MinGeneratorVersion) < 0 {
+	if release.MinGeneratorVersion != "" && CompareVersion(FetchGeneratorVersion(), release.MinGeneratorVersion) < 0 {
 		return Release{}, "", "", &ExitError{Code: ExitIncompatible, Err: fmt.Errorf("scaffold %s requires generator %s", version, release.MinGeneratorVersion)}
 	}
 	if !a.Options.AllowPrerelease && strings.Contains(version, "-") {
@@ -259,7 +260,7 @@ func (a *App) CreateProject(ctx context.Context, sourceDir, version, revision, t
 	if err := RenderProject(sourceDir, tmpDir, input); err != nil {
 		return err
 	}
-	manifest := NewManifest(input.Name, input.Module, input.Profile, a.Options.Repository, version, revision, generatorVersion, true)
+	manifest := NewManifest(input.Name, input.Module, input.Profile, a.Options.Repository, version, revision, FetchGeneratorVersion(), true)
 	if err := WriteManifest(tmpDir, manifest); err != nil {
 		return err
 	}
