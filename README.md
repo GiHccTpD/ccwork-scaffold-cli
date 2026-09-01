@@ -2,6 +2,35 @@
 
 `ccwork-scaffold` 用于从受支持的 `ccwork-scaffold-go-http` Git tag 生成 Go HTTP 服务，并维护业务项目的 scaffold 来源版本。
 
+## 安装
+
+要求本机已安装 Go 1.25.0 和 Git。首次使用私有模块时，先配置 Go 不通过公共代理和校验服务访问 `git.ccwork.com`：
+
+```bash
+go env -w GOPRIVATE=git.ccwork.com
+go env -w GONOSUMDB=git.ccwork.com
+```
+
+安装最新版本：
+
+```bash
+go install git.ccwork.com/ccwork/go/ccwork-scaffold-cli/cmd/ccwork-scaffold@latest
+```
+
+正式发布 tag 后，生产环境建议固定版本，例如：
+
+```bash
+go install git.ccwork.com/ccwork/go/ccwork-scaffold-cli/cmd/ccwork-scaffold@v0.0.1
+```
+
+可执行文件安装到 `GOBIN`；未设置 `GOBIN` 时默认位于 `$(go env GOPATH)/bin`。将该目录加入 `PATH` 后即可验证：
+
+```bash
+ccwork-scaffold version
+```
+
+仓库和 Go module 服务应优先提供 HTTPS。仅当内网服务确实只支持 HTTP 时，才额外配置 `GOINSECURE=git.ccwork.com`。
+
 ## 构建与使用
 
 ```bash
