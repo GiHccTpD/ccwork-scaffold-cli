@@ -4,7 +4,7 @@
 
 本仓库是 `ccwork-scaffold` 的 Go CLI 工具，使用 Go 1.25 和 Cobra。
 
-- `cmd/ccwork-scaffold/`：可执行程序入口。
+- `main.go`：可执行程序入口。
 - `internal/cli/`：命令树、参数模型、Git 来源与缓存、项目渲染、清单和升级逻辑。
 - `internal/cli/cli_test.go`：渲染、版本校验、Git 生成和迁移冲突测试。
 - `spec/`：生成器、版本目录和声明式升级协议的设计文档。
@@ -15,14 +15,14 @@
 ## 构建、测试与开发命令
 
 ```bash
-go build -o bin/ccwork-scaffold ./cmd/ccwork-scaffold
+go build -o bin/ccwork-scaffold .
 GOCACHE=/private/tmp/ccwork-scaffold-cli-go-cache go test ./...
 go vet ./...
 gofmt -w cmd internal
 git diff --check
 ```
 
-分别用于构建 CLI、运行全部测试、执行静态检查、格式化 Go 源码和检查空白错误。调试本地命令时，可使用 `go run ./cmd/ccwork-scaffold version`；涉及远程仓库的操作应优先使用本地测试仓库或 `--offline`。
+分别用于构建 CLI、运行全部测试、执行静态检查、格式化 Go 源码和检查空白错误。调试本地命令时，可使用 `go run . version`；涉及远程仓库的操作应优先使用本地测试仓库或 `--offline`。
 
 ## 编码风格与命名约定
 

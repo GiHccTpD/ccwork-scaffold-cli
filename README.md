@@ -14,13 +14,13 @@ go env -w GONOSUMDB=git.ccwork.com
 安装最新版本：
 
 ```bash
-go install github.com/GiHccTpD/ccwork-scaffold-cli/cmd@latest
+go install github.com/GiHccTpD/ccwork-scaffold-cli@latest
 ```
 
 正式发布 tag 后，生产环境建议固定版本，例如：
 
 ```bash
-go install github.com/GiHccTpD/ccwork-scaffold-cli/cmd@v0.0.1
+go install github.com/GiHccTpD/ccwork-scaffold-cli@v0.0.1
 ```
 
 可执行文件安装到 `GOBIN`；未设置 `GOBIN` 时默认位于 `$(go env GOPATH)/bin`。将该目录加入 `PATH` 后即可验证：
@@ -34,7 +34,7 @@ ccwork-scaffold version
 ## 构建与使用
 
 ```bash
-go build -o bin/ccwork-scaffold ./cmd
+go build -o bin/ccwork-scaffold .
 
 ccwork-scaffold version
 ccwork-scaffold list --repository /path/to/ccwork-scaffold-go-http
