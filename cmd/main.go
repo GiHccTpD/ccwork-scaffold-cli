@@ -7,7 +7,7 @@ import (
 	"git.ccwork.com/ccwork/go/ccwork-scaffold-cli/internal"
 )
 
-// Main 执行 ccwork-scaffold 命令行入口。
+// main 执行 ccwork-scaffold 命令行入口。
 func main() {
 	command := internal.NewCommand(os.Stdout, os.Stderr)
 	if err := command.Execute(); err != nil {
