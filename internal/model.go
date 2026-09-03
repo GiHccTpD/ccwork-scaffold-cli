@@ -17,7 +17,7 @@ import (
 
 const (
 	generatorVersion       = "v0.0.1"
-	defaultRepository      = "https://git.ccwork.com/ccwork/go/ccwork-scaffold-go-http.git"
+	defaultRepository      = "https://git.inspur.com/ccwork/go/ccwork-scaffold-go-http.git"
 	manifestFile           = ".scaffold.yaml"
 	releaseSchemaVersion   = 1
 	manifestSchemaVersion  = 1

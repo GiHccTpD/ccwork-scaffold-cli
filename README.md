@@ -47,7 +47,7 @@ go build -o bin/ccwork-scaffold-cli .
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `--repository <path-or-url>` | `https://git.ccwork.com/ccwork/go/ccwork-scaffold-go-http.git` | 指定 scaffold Git 仓库，可以是本地目录或不含凭据的 Git URL。`inspect` 和 `upgrade` 未显式指定时，优先使用项目清单记录的仓库。 |
+| `--repository <path-or-url>` | `https://git.inspur.com/ccwork/go/ccwork-scaffold-go-http.git` | 指定 scaffold Git 仓库，可以是本地目录或不含凭据的 Git URL。`inspect` 和 `upgrade` 未显式指定时，优先使用项目清单记录的仓库。 |
 | `--cache-dir <dir>` | 操作系统用户缓存目录下的 `ccwork-scaffold` | 指定 Git 仓库和按 commit 解压源码的缓存目录，适合 CI 预热或隔离测试缓存。 |
 | `--offline` | `false` | 禁止 clone 等网络访问，只使用本地仓库和已有缓存；缓存缺失时直接失败。 |
 | `--output <text\|json>` | `text` | 指定报告格式，当前用于 `version`、`list` 和 `inspect`；这些报告命令收到其它值时会报错。 |
