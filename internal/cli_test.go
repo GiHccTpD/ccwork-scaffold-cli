@@ -9,23 +9,27 @@ import (
 	"testing"
 )
 
-// TestRenderProject verifies bounded path, module and package rewriting.
+// TestRenderProject verifies V2 paths, module imports and service identity rendering.
 func TestRenderProject(t *testing.T) {
 	source := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(source, "cmd", "scaffold"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(source, "internal", "scaffold"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	files := map[string]string{
 		"go.mod":                      "module scaffold\n\ngo 1.25.0\n",
-		"cmd/scaffold/main.go":        "package main\nimport \"scaffold/internal/scaffold\"\nfunc main(){ scaffold.NewApp() }\n",
-		"internal/scaffold/app.go":    "package scaffold\nconst AppName = \"scaffold\"\n",
+		"main.go":                     "package main\n\nimport \"scaffold/internal/app\"\n\n// @title Scaffold API\n// @description Scaffold HTTP service API\nfunc main() { app.NewApp() }\n",
+		"internal/app/app.go":         "package app\n\nfunc NewApp() {\n\tcommand := Command{\n\t\tUse: AppName,\n\t\tShort:        \"scaffold\",\n\t}\n\tpm := metrics.NewPrometheusMetrics(\"scaffold\", metrics.WithPort(configs.FetchPrometheusMetricsPort()))\n\tlog.Infow(\"Shutting down scaffold ...\")\n\t_, _ = command, pm\n}\n\nconst AppName   = \"scaffold\"\n",
+		"internal/app/router.go":      "package app\n\nfunc installRouters() { register(\"/ccwork/scaffold/robot/v1\") }\n",
+		"internal/biz/biz.go":         "package biz\n",
+		"internal/controller/app.go":  "package controller\n",
+		"internal/store/store.go":     "package store\n",
+		"docs/docs.go":                "package docs\n\nvar title = \"Scaffold API\"\nvar description = \"Scaffold HTTP service API\"\nvar route = \"/ccwork/scaffold/robot/v1\"\n",
+		"docs/swagger.json":           "{\"title\":\"Scaffold API\",\"description\":\"Scaffold HTTP service API\",\"route\":\"/ccwork/scaffold/robot/v1\"}\n",
 		"configs/config.example.yaml": "server:\n  enabled: true\n",
 		"configs/config.yaml":         "password: real-secret\n",
 		".idea/workspace.xml":         "private",
-		"README.md":                   "# scaffold\n`scaffold`\ncmd/scaffold\n",
+		".jenkins/Jenkinsfile":        "@Library('go-service-ci@v1') _\ngoServicePipeline()\n",
+		"Makefile":                    "legacy-path=cmd/scaffold\nlegacy-bin=./scaffold\n",
+		"Dockerfile":                  "RUN go build -o scaffold ./cmd/scaffold/main.go\nENTRYPOINT [\"./scaffold\"]\n",
+		"README.md":                   "# scaffold\n`scaffold`\ninternal/app\n默认 APP_NAME 由 go.mod 推导为 scaffold\n默认构建产物：./build/scaffold\n--build-arg APP_NAME=scaffold\n镜像：scaffold:v1.2.3\nGET /ccwork/scaffold/robot/v1\n",
+		"scripts/scaffold.bat":        "go build -o scaffold.exe .\r\n",
 	}
 	for name, content := range files {
 		path := filepath.Join(source, filepath.FromSlash(name))
@@ -37,12 +41,49 @@ func TestRenderProject(t *testing.T) {
 		}
 	}
 	target := t.TempDir()
-	if err := RenderProject(source, target, RenderInput{Name: "order-service", Module: "example.com/order-service", Profile: "minimal"}); err != nil {
+	if err := RenderProject(source, target, RenderInput{Name: "order-service", Module: "example.com/platform/order-api", Profile: "minimal"}); err != nil {
 		t.Fatal(err)
 	}
-	assertFileContains(t, filepath.Join(target, "go.mod"), "module example.com/order-service\n")
-	assertFileContains(t, filepath.Join(target, "cmd", "order-service", "main.go"), "example.com/order-service/internal/order-service")
-	assertFileContains(t, filepath.Join(target, "internal", "order-service", "app.go"), "package order_service")
+	assertFileContains(t, filepath.Join(target, "go.mod"), "module example.com/platform/order-api\n")
+	assertFileContains(t, filepath.Join(target, "main.go"), `"example.com/platform/order-api/internal/app"`)
+	assertFileContains(t, filepath.Join(target, "main.go"), "app.NewApp()")
+	assertFileContains(t, filepath.Join(target, "main.go"), "order-service API")
+	assertFileContains(t, filepath.Join(target, "main.go"), "order-service HTTP service API")
+	assertFileContains(t, filepath.Join(target, "internal", "app", "app.go"), `AppName   = "order-service"`)
+	assertFileContains(t, filepath.Join(target, "internal", "app", "app.go"), `Short:        "order-service"`)
+	assertFileContains(t, filepath.Join(target, "internal", "app", "app.go"), `metrics.NewPrometheusMetrics("order-service"`)
+	assertFileContains(t, filepath.Join(target, "internal", "app", "app.go"), "Shutting down order-service ...")
+	assertFileContains(t, filepath.Join(target, "internal", "app", "router.go"), "/ccwork/order-service/robot/v1")
+	assertFileContains(t, filepath.Join(target, "docs", "docs.go"), "order-service API")
+	assertFileContains(t, filepath.Join(target, "docs", "docs.go"), "order-service HTTP service API")
+	assertFileContains(t, filepath.Join(target, "docs", "swagger.json"), "order-service API")
+	assertFileContains(t, filepath.Join(target, "docs", "swagger.json"), "order-service HTTP service API")
+	assertFileContains(t, filepath.Join(target, "docs", "swagger.json"), "/ccwork/order-service/robot/v1")
+	assertFileEquals(t, filepath.Join(target, ".jenkins", "Jenkinsfile"), "@Library('go-service-ci@v1') _\ngoServicePipeline()\n")
+	assertFileEquals(t, filepath.Join(target, "Makefile"), "legacy-path=cmd/scaffold\nlegacy-bin=./scaffold\n")
+	assertFileEquals(t, filepath.Join(target, "Dockerfile"), "RUN go build -o scaffold ./cmd/scaffold/main.go\nENTRYPOINT [\"./scaffold\"]\n")
+	assertFileEquals(t, filepath.Join(target, "scripts", "order-service.bat"), "go build -o scaffold.exe .\r\n")
+	assertFileContains(t, filepath.Join(target, "README.md"), "internal/app")
+	assertFileContains(t, filepath.Join(target, "README.md"), "默认 APP_NAME 由 go.mod 推导为 order-api")
+	assertFileContains(t, filepath.Join(target, "README.md"), "./build/order-api")
+	assertFileContains(t, filepath.Join(target, "README.md"), "APP_NAME=order-service")
+	assertFileContains(t, filepath.Join(target, "README.md"), "order-service:v1.2.3")
+	assertFileContains(t, filepath.Join(target, "README.md"), "/ccwork/order-service/robot/v1")
+	for _, dir := range []string{"app", "biz", "controller", "store"} {
+		info, err := os.Stat(filepath.Join(target, "internal", dir))
+		if err != nil || !info.IsDir() {
+			t.Fatalf("V2 generic internal directory %q must exist, info=%v err=%v", dir, info, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(target, "internal", "order-service")); !os.IsNotExist(err) {
+		t.Fatalf("V2 internal directory must keep its generic path, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "cmd", "order-service")); !os.IsNotExist(err) {
+		t.Fatalf("V2 root entry must not create a renamed cmd directory, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "scripts", "scaffold.bat")); !os.IsNotExist(err) {
+		t.Fatalf("renamed Windows script must not keep its source path, err=%v", err)
+	}
 	if _, err := os.Stat(filepath.Join(target, "configs", "config.yaml")); !os.IsNotExist(err) {
 		t.Fatalf("real config should be excluded, err=%v", err)
 	}
@@ -153,8 +194,8 @@ func TestCommandNewFromAnnotatedTag(t *testing.T) {
 	source := t.TempDir()
 	writeTestFile(t, source, "go.mod", "module scaffold\n\ngo 1.25.0\n")
 	writeTestFile(t, source, "releases.yaml", "schemaVersion: 1\ndefaultVersion: v0.2.0\nreleases:\n  - version: v0.2.0\n    revision: \"<full-commit>\"\n    status: active\n    creatable: true\n    upgradeSource: true\n    minGeneratorVersion: v0.0.1\n    migrationSchemaVersion: 1\n")
-	writeTestFile(t, source, "cmd/scaffold/main.go", "package main\nimport \"scaffold/internal/scaffold\"\nfunc main(){ scaffold.NewApp() }\n")
-	writeTestFile(t, source, "internal/scaffold/app.go", "package scaffold\nfunc NewApp() {}\n")
+	writeTestFile(t, source, "main.go", "package main\nimport \"scaffold/internal/app\"\nfunc main(){ app.NewApp() }\n")
+	writeTestFile(t, source, "internal/app/app.go", "package app\nfunc NewApp() {}\n")
 	ctx := context.Background()
 	for _, args := range [][]string{{"init"}, {"config", "user.email", "test@example.com"}, {"config", "user.name", "test"}, {"add", "."}, {"commit", "-m", "initial"}, {"tag", "-a", "v0.2.0", "-m", "release"}} {
 		if err := runCommand(ctx, "git", append([]string{"-C", source}, args...)...); err != nil {
@@ -175,7 +216,8 @@ func TestCommandNewFromAnnotatedTag(t *testing.T) {
 	if manifest.Scaffold.Version != "v0.2.0" || manifest.Scaffold.Verification != "verified" {
 		t.Fatalf("unexpected manifest: %+v", manifest)
 	}
-	assertFileContains(t, filepath.Join(target, "cmd", "demo-service", "main.go"), "example.com/demo/internal/demo-service")
+	assertFileContains(t, filepath.Join(target, "main.go"), "example.com/demo/internal/app")
+	assertFileContains(t, filepath.Join(target, "main.go"), "app.NewApp()")
 }
 
 // assertFileContains verifies generated text at the public rendering seam.
@@ -187,6 +229,18 @@ func assertFileContains(t *testing.T, path, want string) {
 	}
 	if !strings.Contains(string(data), want) {
 		t.Fatalf("%s does not contain %q; got %q", path, want, data)
+	}
+}
+
+// assertFileEquals verifies an unchanged generated file.
+func assertFileEquals(t *testing.T, path, want string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data); got != want {
+		t.Fatalf("%s = %q, want %q", path, got, want)
 	}
 }
 

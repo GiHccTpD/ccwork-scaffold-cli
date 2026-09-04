@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -20,7 +21,6 @@ func RenderProject(source, target string, input RenderInput) error {
 	if err := ValidateProject(input.Name, input.Module, input.Profile); err != nil {
 		return err
 	}
-	packageName := strings.ReplaceAll(input.Name, "-", "_")
 	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return fmt.Errorf("walk scaffold source: %w", walkErr)
@@ -50,7 +50,7 @@ func RenderProject(source, target string, input RenderInput) error {
 		if err != nil {
 			return fmt.Errorf("read scaffold file %s: %w", rel, err)
 		}
-		data = rewriteSource(rel, data, input, packageName)
+		data = rewriteSource(rel, data, input)
 		if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
 			return fmt.Errorf("create generated parent for %s: %w", outputRel, err)
 		}
@@ -81,67 +81,54 @@ func shouldSkipSource(rel string) bool {
 	return false
 }
 
-// renameSourcePath 将脚手架的两个入口目录映射为业务项目名称。
+// renameSourcePath 仅保留 Windows 构建脚本的兼容命名。
 func renameSourcePath(rel, name string) string {
 	rel = filepath.ToSlash(rel)
-	for _, prefix := range []string{"cmd/scaffold", "internal/scaffold"} {
-		if rel == prefix || strings.HasPrefix(rel, prefix+"/") {
-			return filepath.FromSlash(strings.Replace(rel, prefix, strings.TrimSuffix(prefix, "scaffold")+name, 1))
-		}
-	}
 	if rel == "scripts/scaffold.bat" {
 		return filepath.FromSlash("scripts/" + name + ".bat")
 	}
 	return filepath.FromSlash(rel)
 }
 
-// rewriteSource 只替换已知 module、包路径和构建标识，不做全仓库盲替换。
-func rewriteSource(rel string, data []byte, input RenderInput, packageName string) []byte {
+// rewriteSource 只替换已知 module 和服务身份，不做全仓库盲替换。
+func rewriteSource(rel string, data []byte, input RenderInput) []byte {
 	text := string(data)
 	module := input.Module
 	normalizedRel := filepath.ToSlash(rel)
-	originalInternal := strings.HasPrefix(normalizedRel, "internal/scaffold")
 	switch {
 	case normalizedRel == "go.mod":
 		text = strings.Replace(text, "module scaffold\n", "module "+module+"\n", 1)
 	case strings.HasSuffix(normalizedRel, ".go"):
-		text = strings.ReplaceAll(text, `"scaffold/internal/scaffold`, `"`+module+`/internal/`+input.Name)
 		text = strings.ReplaceAll(text, `"scaffold/`, `"`+module+`/`)
-		if originalInternal {
-			text = strings.Replace(text, "package scaffold", "package "+packageName, 1)
-		}
-		text = strings.ReplaceAll(text, "scaffold.NewApp()", packageName+".NewApp()")
-		text = strings.ReplaceAll(text, `AppName   = "scaffold"`, `AppName   = "`+input.Name+`"`)
-		text = strings.ReplaceAll(text, `NewPrometheusMetrics("scaffold"`, `NewPrometheusMetrics("`+input.Name+`"`)
-		text = strings.ReplaceAll(text, "/ccwork/scaffold", "/ccwork/"+input.Name)
-		if strings.HasPrefix(normalizedRel, "docs/") {
-			text = strings.ReplaceAll(text, "Scaffold API", input.Name+" API")
-			text = strings.ReplaceAll(text, "Scaffold HTTP service API", input.Name+" HTTP service API")
-		}
-	case normalizedRel == "Makefile":
-		text = strings.ReplaceAll(text, "APP_NAME=scaffold", "APP_NAME="+input.Name)
-		text = strings.ReplaceAll(text, "cmd/scaffold", "cmd/"+input.Name)
-		text = strings.ReplaceAll(text, "./scaffold", "./"+input.Name)
-		text = strings.ReplaceAll(text, "scaffold:v", input.Name+":v")
-		text = strings.ReplaceAll(text, "/ccwork/scaffold", "/ccwork/"+input.Name)
-	case normalizedRel == "scripts/scaffold.bat":
-		text = strings.ReplaceAll(text, "cmd\\scaffold", "cmd\\"+input.Name)
-		text = strings.ReplaceAll(text, "scaffold.exe", input.Name+".exe")
-	case normalizedRel == "Dockerfile":
-		text = strings.ReplaceAll(text, "-o scaffold ./cmd/scaffold/main.go", "-o "+input.Name+" ./cmd/"+input.Name+"/main.go")
-		text = strings.ReplaceAll(text, "/app/scaffold", "/app/"+input.Name)
-		text = strings.ReplaceAll(text, `ENTRYPOINT ["./scaffold"`, `ENTRYPOINT ["./`+input.Name+`"`)
+		text = rewriteServiceIdentity(text, input.Name)
 	case strings.HasSuffix(normalizedRel, ".md"):
 		text = strings.Replace(text, "# scaffold", "# "+input.Name, 1)
 		text = strings.ReplaceAll(text, "`scaffold`", "`"+module+"`")
-		text = strings.ReplaceAll(text, "cmd/scaffold", "cmd/"+input.Name)
-		text = strings.ReplaceAll(text, "internal/scaffold", "internal/"+input.Name)
+		text = strings.ReplaceAll(text, "./build/scaffold", "./build/"+FetchModuleBaseName(module))
+		text = strings.ReplaceAll(text, "默认 APP_NAME 由 go.mod 推导为 scaffold", "默认 APP_NAME 由 go.mod 推导为 "+FetchModuleBaseName(module))
+		text = strings.ReplaceAll(text, "APP_NAME=scaffold", "APP_NAME="+input.Name)
+		text = strings.ReplaceAll(text, "scaffold:v", input.Name+":v")
+		text = rewriteServiceIdentity(text, input.Name)
 	case strings.HasPrefix(normalizedRel, "docs/"):
-		text = strings.ReplaceAll(text, "/ccwork/scaffold", "/ccwork/"+input.Name)
-		text = strings.ReplaceAll(text, "Scaffold API", input.Name+" API")
-		text = strings.ReplaceAll(text, "Scaffold HTTP service API", input.Name+" HTTP service API")
+		text = rewriteServiceIdentity(text, input.Name)
 	}
 	return []byte(text)
+}
+
+// rewriteServiceIdentity 渲染模板中明确约定的服务名称、路由和 Swagger 元数据。
+func rewriteServiceIdentity(text, name string) string {
+	text = strings.ReplaceAll(text, `AppName   = "scaffold"`, `AppName   = "`+name+`"`)
+	text = strings.ReplaceAll(text, `Short:        "scaffold"`, `Short:        "`+name+`"`)
+	text = strings.ReplaceAll(text, `NewPrometheusMetrics("scaffold"`, `NewPrometheusMetrics("`+name+`"`)
+	text = strings.ReplaceAll(text, "Shutting down scaffold ...", "Shutting down "+name+" ...")
+	text = strings.ReplaceAll(text, "/ccwork/scaffold", "/ccwork/"+name)
+	text = strings.ReplaceAll(text, "Scaffold API", name+" API")
+	return strings.ReplaceAll(text, "Scaffold HTTP service API", name+" HTTP service API")
+}
+
+// FetchModuleBaseName 返回 Go module 路径最后一段，作为默认构建产物名称。
+func FetchModuleBaseName(module string) string {
+	return path.Base(module)
 }
 
 // FetchModuleFromGoMod 读取业务项目 go.mod 的 module 声明。
