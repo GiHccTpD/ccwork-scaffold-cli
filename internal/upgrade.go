@@ -54,7 +54,7 @@ func (a *App) Upgrade(ctx context.Context, dir, target string, latest, dryRun bo
 	if targetRelease.Status != "active" {
 		return &ExitError{Code: ExitUnsupported, Err: fmt.Errorf("scaffold version %s is not an active upgrade target", target)}
 	}
-	if targetRelease.MigrationSchemaVersion != 0 && targetRelease.MigrationSchemaVersion != migrationSchemaVersion {
+	if targetRelease.MigrationSchemaVersion > migrationSchemaVersion {
 		return &ExitError{Code: ExitIncompatible, Err: fmt.Errorf("scaffold %s requires migration schema version %d", target, targetRelease.MigrationSchemaVersion)}
 	}
 	if !manifest.Scaffold.Upgradeable {
@@ -63,7 +63,7 @@ func (a *App) Upgrade(ctx context.Context, dir, target string, latest, dryRun bo
 	if CompareVersion(target, manifest.Scaffold.Version) <= 0 {
 		return a.WriteReport(UpgradeReport{From: manifest.Scaffold.Version, To: target, DryRun: dryRun}, "no upgrade needed")
 	}
-	_, targetRevision, err := source.FetchReleaseSource(ctx, targetRelease)
+	targetSourceDir, targetRevision, err := source.FetchReleaseSource(ctx, targetRelease)
 	if err != nil {
 		return err
 	}
@@ -71,7 +71,39 @@ func (a *App) Upgrade(ctx context.Context, dir, target string, latest, dryRun bo
 	if err != nil {
 		return err
 	}
-	report, changes, pending, err := BuildMigrationPlan(dir, manifest, migration)
+	var report UpgradeReport
+	var changes map[string]*[]byte
+	var pending []ManualAction
+	switch migration.SchemaVersion {
+	case 1:
+		report, changes, pending, err = BuildMigrationPlan(dir, manifest, migration)
+	case 2:
+		currentRelease, releaseErr := FetchRelease(catalog, manifest.Scaffold.Version)
+		if releaseErr != nil {
+			return releaseErr
+		}
+		currentSourceDir, _, sourceErr := source.FetchReleaseSource(ctx, currentRelease)
+		if sourceErr != nil {
+			return sourceErr
+		}
+		oldGeneratedDir, oldCleanup, renderErr := FetchRenderedRelease(currentSourceDir, manifest.Project)
+		if renderErr != nil {
+			return renderErr
+		}
+		defer oldCleanup()
+		newGeneratedDir, newCleanup, renderErr := FetchRenderedRelease(targetSourceDir, manifest.Project)
+		if renderErr != nil {
+			return renderErr
+		}
+		defer newCleanup()
+		profile, profileErr := FetchProfile(targetSourceDir, manifest.Project.Profile)
+		if profileErr != nil {
+			return profileErr
+		}
+		report, changes, pending, err = BuildManagedMigrationPlan(dir, manifest, migration, oldGeneratedDir, newGeneratedDir, profile)
+	default:
+		return &ExitError{Code: ExitIncompatible, Err: fmt.Errorf("unsupported migration schema version %d", migration.SchemaVersion)}
+	}
 	if err != nil {
 		return err
 	}
@@ -86,7 +118,7 @@ func (a *App) Upgrade(ctx context.Context, dir, target string, latest, dryRun bo
 	}
 	if len(pending) > 0 {
 		manifest.PendingUpgrade = &PendingUpgrade{TargetVersion: target, TargetRevision: targetRevision, ManualActions: pending}
-		if err := WriteManifest(dir, manifest); err != nil {
+		if err := ApplyChanges(dir, changes, manifest); err != nil {
 			return err
 		}
 		return a.WriteReport(report, FormatUpgrade(report))
@@ -171,7 +203,11 @@ func (a *App) VerifyAndAdopt(ctx context.Context, dir string, manifest Manifest)
 	if err := RenderProject(sourceDir, stage, RenderInput{Name: manifest.Project.Name, Module: manifest.Project.Module, Profile: manifest.Project.Profile}); err != nil {
 		return err
 	}
-	if err := CompareGeneratedFiles(dir, stage); err != nil {
+	profile, err := FetchProfile(sourceDir, manifest.Project.Profile)
+	if err != nil {
+		return err
+	}
+	if err := CompareOwnedGeneratedFiles(dir, stage, profile); err != nil {
 		return &ExitError{Code: ExitConflict, Err: fmt.Errorf("adoption verification failed: %w", err)}
 	}
 	manifest.Scaffold.Revision = revision
@@ -183,9 +219,23 @@ func (a *App) VerifyAndAdopt(ctx context.Context, dir string, manifest Manifest)
 	return a.WriteReport(manifest.Scaffold, "adopted "+release.Version)
 }
 
+// FetchRenderedRelease 将不可变 release 按项目身份渲染到临时目录，供 schema v2 计算基线。
+func FetchRenderedRelease(sourceDir string, project Project) (string, func(), error) {
+	stage, err := os.MkdirTemp("", ".ccwork-scaffold-render-")
+	if err != nil {
+		return "", func() {}, fmt.Errorf("create rendered release staging directory: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(stage) }
+	if err := RenderProject(sourceDir, stage, RenderInput{Name: project.Name, Module: project.Module, Profile: project.Profile}); err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	return stage, cleanup, nil
+}
+
 // BuildMigrationPlan 只读计算迁移结果，遇到首个冲突时不写入任何文件。
 func BuildMigrationPlan(dir string, manifest Manifest, migration Migration) (UpgradeReport, map[string]*[]byte, []ManualAction, error) {
-	if migration.SchemaVersion != migrationSchemaVersion {
+	if migration.SchemaVersion != 1 {
 		return UpgradeReport{}, nil, nil, &ExitError{Code: ExitIncompatible, Err: fmt.Errorf("unsupported migration schema version %d", migration.SchemaVersion)}
 	}
 	if migration.From != manifest.Scaffold.Version {
@@ -217,6 +267,114 @@ func BuildMigrationPlan(dir string, manifest Manifest, migration Migration) (Upg
 		}
 	}
 	return report, changes, pending, nil
+}
+
+// BuildManagedMigrationPlan 以旧、新渲染基线为前置条件，计算 schema v2 的稳定文件迁移。
+func BuildManagedMigrationPlan(projectDir string, manifest Manifest, migration Migration, oldGeneratedDir, newGeneratedDir string, targetProfile *Profile) (UpgradeReport, map[string]*[]byte, []ManualAction, error) {
+	if migration.SchemaVersion != 2 {
+		return UpgradeReport{}, nil, nil, &ExitError{Code: ExitIncompatible, Err: fmt.Errorf("unsupported managed migration schema version %d", migration.SchemaVersion)}
+	}
+	if migration.From != manifest.Scaffold.Version || migration.To == "" {
+		return UpgradeReport{}, nil, nil, fmt.Errorf("migration source or target does not match project version")
+	}
+	if len(migration.Profiles) > 0 && !slices.Contains(migration.Profiles, manifest.Project.Profile) {
+		return UpgradeReport{}, nil, nil, fmt.Errorf("migration %s -> %s does not support profile %s", migration.From, migration.To, manifest.Project.Profile)
+	}
+	report := UpgradeReport{From: migration.From, To: migration.To}
+	changes := make(map[string]*[]byte)
+	pending := make([]ManualAction, 0)
+	for _, operation := range migration.Operations {
+		change, action, err := BuildManagedOperation(projectDir, oldGeneratedDir, newGeneratedDir, changes, targetProfile, operation)
+		if err != nil {
+			if asExit(err) != nil {
+				return UpgradeReport{}, nil, nil, err
+			}
+			return UpgradeReport{}, nil, nil, &ExitError{Code: ExitConflict, Err: err}
+		}
+		if change != nil {
+			report.Changes = append(report.Changes, *change)
+		}
+		if action != nil {
+			pending = append(pending, *action)
+		}
+	}
+	return report, changes, pending, nil
+}
+
+// BuildManagedOperation 只允许迁移文件明确声明且由新 profile 管理的稳定路径。
+func BuildManagedOperation(projectDir, oldGeneratedDir, newGeneratedDir string, changes map[string]*[]byte, targetProfile *Profile, operation Operation) (*PlanChange, *ManualAction, error) {
+	if operation.Type == "require-manual-action" {
+		if operation.ManualID == "" {
+			return nil, nil, fmt.Errorf("manual action id is required")
+		}
+		return nil, &ManualAction{ID: operation.ManualID, Description: operation.Description, Status: "pending"}, nil
+	}
+	if err := ValidateRelativePath(operation.Path); err != nil {
+		return nil, nil, err
+	}
+	if err := ValidateManagedPath(targetProfile, operation.Path); err != nil {
+		return nil, nil, err
+	}
+	path := filepath.FromSlash(operation.Path)
+	newData, newExists, err := FetchPlannedFile(newGeneratedDir, nil, path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read new generated file %s: %w", operation.Path, err)
+	}
+	currentData, currentExists, err := FetchPlannedFile(projectDir, changes, path)
+	if err != nil {
+		return nil, nil, err
+	}
+	switch operation.Type {
+	case "sync-managed-file":
+		oldData, oldExists, err := FetchPlannedFile(oldGeneratedDir, nil, path)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read old generated file %s: %w", operation.Path, err)
+		}
+		if !oldExists || !newExists || !currentExists || FetchSHA256(currentData) != FetchSHA256(oldData) {
+			return nil, nil, fmt.Errorf("sync conflicts because %s was modified or has no generated baseline", operation.Path)
+		}
+		content := append([]byte(nil), newData...)
+		changes[path] = &content
+		return &PlanChange{Action: "replace", Path: operation.Path}, nil, nil
+	case "add-managed-file":
+		if !newExists || currentExists {
+			return nil, nil, fmt.Errorf("add conflicts because %s already exists or has no target baseline", operation.Path)
+		}
+		content := append([]byte(nil), newData...)
+		changes[path] = &content
+		return &PlanChange{Action: "add", Path: operation.Path}, nil, nil
+	case "move-managed-file":
+		if err := ValidateRelativePath(operation.FromPath); err != nil {
+			return nil, nil, err
+		}
+		fromPath := filepath.FromSlash(operation.FromPath)
+		oldData, oldExists, err := FetchPlannedFile(oldGeneratedDir, nil, fromPath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read old generated file %s: %w", operation.FromPath, err)
+		}
+		actualData, actualExists, err := FetchPlannedFile(projectDir, changes, fromPath)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !oldExists || !newExists || !actualExists || currentExists || FetchSHA256(actualData) != FetchSHA256(oldData) {
+			return nil, nil, fmt.Errorf("move conflicts for %s -> %s", operation.FromPath, operation.Path)
+		}
+		changes[fromPath] = nil
+		content := append([]byte(nil), newData...)
+		changes[path] = &content
+		return &PlanChange{Action: "rename", Path: operation.Path, From: operation.FromPath}, nil, nil
+	default:
+		return nil, nil, &ExitError{Code: ExitIncompatible, Err: fmt.Errorf("unsupported managed migration operation %q", operation.Type)}
+	}
+}
+
+// ValidateManagedPath 拒绝 migration 写入 project-owned、generated 或未声明的路径。
+func ValidateManagedPath(profile *Profile, path string) error {
+	owner, declared := FetchPathOwner(profile, path)
+	if !declared || owner != "scaffold" {
+		return &ExitError{Code: ExitConflict, Err: fmt.Errorf("migration path %s is not scaffold-owned", path)}
+	}
+	return nil
 }
 
 // ApplyOperation 在内存计划中执行单个白名单迁移操作。
@@ -365,6 +523,11 @@ func ApplyChanges(dir string, changes map[string]*[]byte, manifest Manifest) err
 
 // CompareGeneratedFiles 核对渲染基线和业务项目的所有受管理文件。
 func CompareGeneratedFiles(projectDir, generatedDir string) error {
+	return CompareOwnedGeneratedFiles(projectDir, generatedDir, nil)
+}
+
+// CompareOwnedGeneratedFiles 只核对 profile 声明为 scaffold-owned 的渲染基线文件。
+func CompareOwnedGeneratedFiles(projectDir, generatedDir string, profile *Profile) error {
 	var mismatch string
 	err := filepath.Walk(generatedDir, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
@@ -373,6 +536,12 @@ func CompareGeneratedFiles(projectDir, generatedDir string) error {
 		rel, err := filepath.Rel(generatedDir, path)
 		if err != nil || rel == "." || rel == manifestFile || info.IsDir() {
 			return nil
+		}
+		if profile != nil {
+			owner, declared := FetchPathOwner(profile, filepath.ToSlash(rel))
+			if !declared || owner != "scaffold" {
+				return nil
+			}
 		}
 		generated, err := os.ReadFile(path)
 		if err != nil {
@@ -399,7 +568,11 @@ func ValidateCleanWorktree(ctx context.Context, dir string) error {
 	}
 	absDir, err := filepath.Abs(dir)
 	if err != nil || filepath.Clean(root) != filepath.Clean(absDir) {
-		return &ExitError{Code: ExitConflict, Err: fmt.Errorf("formal upgrade requires project root to be the Git worktree root")}
+		resolvedRoot, rootErr := filepath.EvalSymlinks(root)
+		resolvedDir, dirErr := filepath.EvalSymlinks(absDir)
+		if rootErr != nil || dirErr != nil || filepath.Clean(resolvedRoot) != filepath.Clean(resolvedDir) {
+			return &ExitError{Code: ExitConflict, Err: fmt.Errorf("formal upgrade requires project root to be the Git worktree root")}
+		}
 	}
 	status, err := runGitInDir(ctx, dir, "status", "--porcelain")
 	if err != nil {

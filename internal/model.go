@@ -21,7 +21,8 @@ const (
 	manifestFile           = ".scaffold.yaml"
 	releaseSchemaVersion   = 1
 	manifestSchemaVersion  = 1
-	migrationSchemaVersion = 1
+	migrationSchemaVersion = 2
+	profileSchemaVersion   = 1
 )
 
 // FetchGeneratorVersion returns the module version embedded in the installed binary.
@@ -170,6 +171,27 @@ type Operation struct {
 	SHA256      string `yaml:"sha256"`
 	ManualID    string `yaml:"manualId"`
 	Description string `yaml:"description"`
+}
+
+// Profile 描述某个 scaffold release 可生成的文件集合和文件所有权。
+type Profile struct {
+	SchemaVersion int              `yaml:"schemaVersion"`
+	Name          string           `yaml:"name"`
+	Exclude       []string         `yaml:"exclude"`
+	Overlays      []ProfileOverlay `yaml:"overlays"`
+	Ownership     []OwnershipRule  `yaml:"ownership"`
+}
+
+// ProfileOverlay 描述 profile 覆盖到生成项目的单个模板文件。
+type ProfileOverlay struct {
+	Source string `yaml:"source"`
+	Target string `yaml:"target"`
+}
+
+// OwnershipRule 描述 profile 对仓库相对路径的所有权声明。
+type OwnershipRule struct {
+	Path  string `yaml:"path"`
+	Owner string `yaml:"owner"`
 }
 
 var (
