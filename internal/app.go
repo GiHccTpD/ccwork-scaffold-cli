@@ -260,7 +260,7 @@ func (a *App) CreateProject(ctx context.Context, sourceDir, version, revision, t
 	if err := RenderProject(sourceDir, tmpDir, input); err != nil {
 		return err
 	}
-	manifest := NewManifest(input.Name, input.Module, input.Profile, a.Options.Repository, version, revision, FetchGeneratorVersion(), true)
+	manifest := NewManifest(input.Name, input.Module, input.Profile, a.Options.Repository, version, revision, FetchGeneratorVersion(), verify)
 	if err := WriteManifest(tmpDir, manifest); err != nil {
 		return err
 	}
@@ -315,7 +315,7 @@ func ValidateEmptyTarget(target string) error {
 
 // VerifyGeneratedProject 执行 new --verify 约定的固定检查。
 func VerifyGeneratedProject(ctx context.Context, dir string) error {
-	for _, args := range [][]string{{"test", "./..."}, {"build", "./..."}, {"diff", "--check"}} {
+	for _, args := range [][]string{{"go", "test", "./..."}, {"go", "build", "./..."}, {"git", "diff", "--check"}} {
 		if err := runCommandInDir(ctx, dir, args[0], args[1:]...); err != nil {
 			return fmt.Errorf("verify generated project with git/go: %w", err)
 		}
@@ -329,7 +329,7 @@ func runCommandInDir(ctx context.Context, dir, name string, args ...string) erro
 	command.Dir = dir
 	output, err := command.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%s %s: %s", name, strings.Join(args, " "), strings.TrimSpace(string(output)))
+		return fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}
 	return nil
 }

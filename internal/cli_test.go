@@ -384,7 +384,7 @@ func TestCommandNewFromAnnotatedTag(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "demo-service")
 	var output strings.Builder
 	command := NewCommand(&output, &output)
-	command.SetArgs([]string{"--repository", source, "--cache-dir", t.TempDir(), "new", "--name", "demo-service", "--module", "example.com/demo", "--dir", target, "--no-git-init"})
+	command.SetArgs([]string{"--repository", source, "--cache-dir", t.TempDir(), "new", "--name", "demo-service", "--module", "example.com/demo", "--dir", target, "--no-git-init", "--verify"})
 	if err := command.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -397,6 +397,19 @@ func TestCommandNewFromAnnotatedTag(t *testing.T) {
 	}
 	assertFileContains(t, filepath.Join(target, "main.go"), "example.com/demo/internal/app")
 	assertFileContains(t, filepath.Join(target, "main.go"), "app.NewApp()")
+	unverifiedTarget := filepath.Join(t.TempDir(), "demo-unverified")
+	command = NewCommand(&output, &output)
+	command.SetArgs([]string{"--repository", source, "--cache-dir", t.TempDir(), "new", "--name", "demo-unverified", "--module", "example.com/demo-unverified", "--dir", unverifiedTarget, "--no-git-init"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	unverifiedManifest, err := FetchManifest(unverifiedTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unverifiedManifest.Scaffold.Verification != "unverified" || unverifiedManifest.Scaffold.Upgradeable {
+		t.Fatalf("unexpected unverified manifest: %+v", unverifiedManifest)
+	}
 }
 
 // assertFileContains verifies generated text at the public rendering seam.
@@ -432,5 +445,31 @@ func writeTestFile(t *testing.T, root, name, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRenderProjectCRLFModule(t *testing.T) {
+	source := t.TempDir()
+	writeTestFile(t, source, "go.mod", "module scaffold\r\n\r\ngo 1.25.0\r\n")
+	target := t.TempDir()
+	if err := RenderProject(source, target, RenderInput{Name: "order-service", Module: "example.com/order-service", Profile: "minimal"}); err != nil {
+		t.Fatal(err)
+	}
+	assertFileEquals(t, filepath.Join(target, "go.mod"), "module example.com/order-service\r\n\r\ngo 1.25.0\r\n")
+}
+
+func TestVerifyGeneratedProject(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, "go.mod", "module example.com/check\n\ngo 1.25.0\n")
+	writeTestFile(t, dir, "main.go", "package main\nfunc main() {}\n")
+	if err := runCommand(context.Background(), "git", "-C", dir, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyGeneratedProject(context.Background(), dir); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, dir, "main_test.go", "package main\nimport \"testing\"\nfunc TestFailure(t *testing.T) { t.Fatal(\"failure\") }\n")
+	if err := VerifyGeneratedProject(context.Background(), dir); err == nil || !strings.Contains(err.Error(), "go test ./...") {
+		t.Fatalf("expected go test failure, got %v", err)
 	}
 }
