@@ -225,6 +225,7 @@ func rewriteSource(rel string, data []byte, input RenderInput, profile *Profile)
 	normalizedRel := filepath.ToSlash(rel)
 	switch {
 	case normalizedRel == "go.mod":
+		text = strings.Replace(text, "module scaffold\r\n", "module "+module+"\r\n", 1)
 		text = strings.Replace(text, "module scaffold\n", "module "+module+"\n", 1)
 	case strings.HasSuffix(normalizedRel, ".go"):
 		text = strings.ReplaceAll(text, `"scaffold/`, `"`+module+`/`)
