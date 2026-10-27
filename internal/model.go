@@ -15,6 +15,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// buildVersion 可由发布构建的 -X 固定；运行期不修改，普通 go install 使用 module build info。
+var buildVersion string
+
 const (
 	generatorVersion       = "v0.0.1"
 	defaultRepository      = "https://git.inspur.com/ccwork/go/ccwork-scaffold-go-http.git"
@@ -28,6 +31,9 @@ const (
 // FetchGeneratorVersion returns the module version embedded in the installed binary.
 // Local development builds do not include a release tag, so they use the fallback version.
 func FetchGeneratorVersion() string {
+	if buildVersion != "" {
+		return buildVersion
+	}
 	return ResolveGeneratorVersion(debug.ReadBuildInfo())
 }
 
