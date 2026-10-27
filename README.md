@@ -54,6 +54,27 @@ go build -o bin/ccwork-scaffold-cli .
 | `--allow-prerelease` | `false` | 允许 `new` 或 `adopt` 使用包含预发布标识的 scaffold 版本，例如 `v0.3.0-rc.1`；默认拒绝预发布版本。 |
 | `-h`、`--help` | - | 输出根命令或当前子命令的帮助信息，不执行业务操作。 |
 
+### `ci`：给存量 Go 项目安装 GitLab CI
+
+CI 来源独立于 scaffold；不要求 `.scaffold.yaml`，不执行 adopt 或整体升级。首次提供此命令的 CLI 版本为 v0.1.0。
+
+```bash
+ccwork-scaffold-cli ci list
+ccwork-scaffold-cli ci init --dir ../legacy-service --ci-version v0.1.0 --dry-run
+ccwork-scaffold-cli ci init --dir ../legacy-service --ci-version v0.1.0
+ccwork-scaffold-cli ci inspect --dir ../legacy-service
+```
+
+`ci --ci-repository <路径或无凭据URL>` 指定独立来源，默认 `https://git.inspur.com/ccwork/go/ops-pipelines.git`，不影响全局 `--repository`。支持全局 `--output json`、`--cache-dir`、`--offline` 和 `--allow-prerelease`。清单 minGoVersion 指扫描运行环境要求，不强制提高老项目的 Go 语言版本；项目请求的 Go/toolchain 不得高于固定镜像。来源根目录为 `ci-releases.yaml`，资产清单为 `bundles/go-security/bundle.yaml`；仅 active 正式版本可安装，须满足最低 CLI。
+
+- `init` 必须明确 `--ci-version`；正式执行要求独立、干净的 Git worktree、根 go.mod 及与镜像兼容的 Go/toolchain 声明。首期只支持根 Go module。
+- dry-run 不写入目标项目，报告 add/same/conflict/incompatible。冲突整次不写入；相同版本和文件重复执行无变化。已有不同版本不覆盖，首期不支持 update 或 YAML 合并。
+- `.gitlab/ci-installation.yaml` 记录 schema、来源、版本、完整 commit、文件 hash 和权限。`inspect` 离线返回 complete 或 drifted，以及 same/missing/modified；漂移退出 2。
+- 仅安装白名单文件；拒绝符号链接、目录越界、大小写别名及父子文件冲突。普通写入失败回滚本次新增文件和目录，报告恢复失败，不承诺跨文件的进程崩溃原子性。
+- 安装不提交、推送、构建镜像或调用 GitLab 管理 API。后续 push 会按模板注册通知；默认分支 push 会同步 Schedule。接入前须准备 Runner、固定镜像、凭据、通知服务和离线漏洞库。
+
+安装清单不代表真实环境验收。完整要求以对应 CI 版本的 `.gitlab/security/README.md` 为准；真实扫描、通知和 Schedule 必须单独验证。
+
 ### `version`：查看 generator 版本
 
 `version` 没有专属参数，仅接受上述全局参数。默认输出当前 generator 版本。

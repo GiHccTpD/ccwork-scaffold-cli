@@ -35,7 +35,7 @@ func NewCommand(stdout, stderr io.Writer) *cobra.Command {
 	root.PersistentFlags().StringVar(&app.Options.Output, "output", "text", "report format: text or json")
 	root.PersistentFlags().BoolVar(&app.Options.AllowPrerelease, "allow-prerelease", false, "allow prerelease scaffold versions")
 
-	root.AddCommand(app.newVersionCommand(), app.newListCommand(), app.newCommand(), app.newInspectCommand(), app.newAdoptCommand(), app.newUpgradeCommand())
+	root.AddCommand(app.newVersionCommand(), app.newListCommand(), app.newCommand(), app.newInspectCommand(), app.newAdoptCommand(), app.newUpgradeCommand(), app.newCICommand())
 	return root
 }
 

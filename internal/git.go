@@ -126,7 +126,7 @@ func (s GitSource) FetchReleaseSource(ctx context.Context, release Release) (str
 		return "", "", fmt.Errorf("create source cache staging directory: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
-	archiveData, err := s.FetchGit(ctx, repo, "archive", "--format=tar", release.Version)
+	archiveData, err := s.FetchGit(ctx, repo, "archive", "--format=tar", "refs/tags/"+release.Version)
 	if err != nil {
 		return "", "", fmt.Errorf("archive scaffold %s: %w", release.Version, err)
 	}
