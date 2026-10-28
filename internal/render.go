@@ -173,6 +173,9 @@ func applyProfileOverlays(source, target string, input RenderInput, profile *Pro
 		return nil
 	}
 	for _, overlay := range profile.Overlays {
+		if shouldSkipReleaseSource(overlay.Target) {
+			continue
+		}
 		data, err := os.ReadFile(filepath.Join(source, filepath.FromSlash(overlay.Source)))
 		if err != nil {
 			return fmt.Errorf("read profile overlay %s: %w", overlay.Source, err)
@@ -192,6 +195,9 @@ func applyProfileOverlays(source, target string, input RenderInput, profile *Pro
 // shouldSkipSource 排除来源仓库历史、私有配置和本地产物。
 func shouldSkipSource(rel string) bool {
 	rel = filepath.ToSlash(rel)
+	if shouldSkipReleaseSource(rel) {
+		return true
+	}
 	parts := strings.Split(rel, "/")
 	for _, part := range parts {
 		switch part {
@@ -207,6 +213,35 @@ func shouldSkipSource(rel string) bool {
 		return true
 	}
 	return false
+}
+
+// shouldSkipReleaseSource 排除来源工程的发布记录、归档和项目配置，保留共享工具、示例及操作文档。
+func shouldSkipReleaseSource(rel string) bool {
+	// 📋1.排除来源 catalog 和包含已发布版本、基线或定制身份的项目记录
+	rel = strings.ToLower(filepath.ToSlash(rel))
+	switch rel {
+	case "releases.yaml", "release/releases.yaml", ".gitlab/release-policy.json", ".gitlab/ci-customizations.yaml":
+		return true
+	}
+
+	// 📦2.按约定目录排除历史日志与生成物，避免误删 scripts/release 和接入文档
+	for _, directory := range []string{"reports", "changelog", "releases", "release-notes", "docs/changelog", "docs/releases", "docs/release-notes"} {
+		if rel == directory || strings.HasPrefix(rel, directory+"/") {
+			return true
+		}
+	}
+
+	// 📝3.只识别根目录常见日志文件和语言变体，不按 release 字样模糊过滤
+	if path.Dir(rel) != "." {
+		return false
+	}
+	extension := path.Ext(rel)
+	if extension != ".md" && extension != ".rst" && extension != ".txt" {
+		return false
+	}
+	stem := strings.TrimSuffix(rel, extension)
+	return stem == "changelog" || strings.HasPrefix(stem, "changelog.") ||
+		stem == "release-notes" || strings.HasPrefix(stem, "release-notes.")
 }
 
 // renameSourcePath 仅保留 Windows 构建脚本的兼容命名。

@@ -60,20 +60,44 @@ CI 来源独立于 scaffold；不要求 `.scaffold.yaml`，不执行 adopt 或�
 
 ```bash
 ccwork-scaffold-cli ci list
-ccwork-scaffold-cli ci init --dir ../legacy-service --ci-version v0.1.0 --dry-run
-ccwork-scaffold-cli ci init --dir ../legacy-service --ci-version v0.1.0
+ccwork-scaffold-cli ci init --dir ../legacy-service --ci-version v0.2.0 --dry-run
+ccwork-scaffold-cli ci init --dir ../legacy-service --ci-version v0.2.0
 ccwork-scaffold-cli ci inspect --dir ../legacy-service
 ```
 
 `ci --ci-repository <路径或无凭据URL>` 指定独立来源，默认 `https://git.inspur.com/ccwork/go/ops-pipelines.git`，不影响全局 `--repository`。支持全局 `--output json`、`--cache-dir`、`--offline` 和 `--allow-prerelease`。清单 minGoVersion 指扫描运行环境要求，不强制提高老项目的 Go 语言版本；项目请求的 Go/toolchain 不得高于固定镜像。来源根目录为 `ci-releases.yaml`，资产清单为 `bundles/go-security/bundle.yaml`；仅 active 正式版本可安装，须满足最低 CLI。
 
 - `init` 必须明确 `--ci-version`；正式执行要求独立、干净的 Git worktree、根 go.mod 及与镜像兼容的 Go/toolchain 声明。首期只支持根 Go module。
-- dry-run 不写入目标项目，报告 add/same/conflict/incompatible。冲突整次不写入；相同版本和文件重复执行无变化。已有不同版本不覆盖，首期不支持 update 或 YAML 合并。
-- `.gitlab/ci-installation.yaml` 记录 schema、来源、版本、完整 commit、文件 hash 和权限。`inspect` 离线返回 complete 或 drifted，以及 same/missing/modified；漂移退出 2。
+- dry-run 不写入目标项目，报告 add/same/conflict/incompatible。冲突整次不写入；相同版本和文件重复执行无变化。init 不覆盖已有不同版本；CLI v0.2.0 起使用下述受约束 update，仍不合并任意 YAML。
+- `.gitlab/ci-installation.yaml` 记录 schema、来源、版本、完整 commit、文件 hash 和权限。`inspect` 离线返回 complete、customized 或 drifted，以及 same/missing/modified；漂移退出 2。
 - 仅安装白名单文件；拒绝符号链接、目录越界、大小写别名及父子文件冲突。普通写入失败回滚本次新增文件和目录，报告恢复失败，不承诺跨文件的进程崩溃原子性。
 - 安装不提交、推送、构建镜像或调用 GitLab 管理 API。后续 push 会按模板注册通知；默认分支 push 会同步 Schedule。接入前须准备 Runner、固定镜像、凭据、通知服务和离线漏洞库。
 
 安装清单不代表真实环境验收。完整要求以对应 CI 版本的 `.gitlab/security/README.md` 为准；真实扫描、通知和 Schedule 必须单独验证。
+
+### CI 受约束更新与人工定制（v0.2.0 起）
+
+CLI v0.2.0 提供以下命令，v0.1.0 和更早版本不具备这些能力。CI v0.2.0 要求 CLI v0.2.0；执行前核对目标版本的 active 状态、来源和实际帮助。
+
+```bash
+ccwork-scaffold-cli ci update --dir ../legacy-service --ci-version v0.2.0 --dry-run
+ccwork-scaffold-cli ci update --dir ../legacy-service --ci-version v0.2.0
+```
+
+更新优先读取安装清单中的来源仓库，不允许切换来源；验证旧记录与 annotated tag 中的原始清单一致。目标必须 active 且满足最低 CLI。只替换与旧来源 hash/权限一致的文件；缺失、定制、新路径冲突或目标删除旧资产时整次停止，不提供 force。正式执行要求干净工作树，安装清单最后写入；普通失败恢复本次改动，不承诺进程崩溃的跨文件原子性。并发更新使用独占锁，陈旧锁需检查现场后人工处置。
+
+`.gitlab/release-policy.json` 和验证证据不在共享文件白名单中，更新不会覆盖。旧安装清单 schema 保持 1，新增路径由配套 CLI 校验；新 CI catalog 必须声明准确的最低 CLI，旧工具不能安装新增路径。
+
+已有安装记录的定制工程人工合并后，可显式记录经过审核的文件：
+
+```bash
+ccwork-scaffold-cli ci customize --dir ../legacy-service --path .gitlab-ci.yml --reason "保留项目构建入口"
+ccwork-scaffold-cli ci inspect --dir ../legacy-service
+```
+
+该操作新增独立 `.gitlab/ci-customizations.yaml`（schema 1），记录来源 revision、原版 hash、确认内容 hash/权限及理由；原安装清单不变。inspect 报告 customized（退出 0），不伪报 complete；后续未确认变化仍为 drifted（退出 2）。update 始终拒绝覆盖已确认定制。旧 CLI 继续按原来源识别漂移，不能把新状态解释成原版安装成功。不得在理由中填写凭据或敏感数据。
+
+完整发版策略与证据契约由 ops-pipelines 的 `.gitlab/release/README.md` 维护，CI 发布、CLI 发布与脚手架资产导入分别验收。
 
 ### `version`：查看 generator 版本
 
@@ -127,6 +151,14 @@ ccwork-scaffold-cli \
 | `--dir <dir>` | 否 | `--name` 的值 | 指定目标目录。目录必须不存在或为空，CLI 不会覆盖非空目录。 |
 | `--no-git-init` | 否 | `false` | 不在生成项目中执行 `git init`。CLI 无论如何都不会自动 commit 或 push。 |
 | `--verify` | 否 | `false` | 生成期间依次运行 `go test ./...`、`go build ./...` 和 `git diff --check`；任一步失败都不会发布目标目录。 |
+
+生成项目时，发布工具和脚手架自身的发布历史分别处理（CLI v0.2.0 起）：
+
+- 保留 `scripts/release/`、`.gitlab/release/` 内的共享工具、模板和示例，以及 `docs/release.md` 操作说明。
+- 排除根目录 `CHANGELOG`、`release-notes` 的 `.md`、`.rst`、`.txt` 文件及语言变体；排除根目录 `changelog/`、`releases/`、`release-notes/`、`reports/`，以及 `docs/changelog/`、`docs/releases/`、`docs/release-notes/`。
+- 排除来源 `releases.yaml`、兼容位置 `release/releases.yaml`、实际 `.gitlab/release-policy.json` 和 `.gitlab/ci-customizations.yaml`；新项目根据示例独立配置基线和发布历史，不继承脚手架的已发布记录。
+
+规则覆盖 minimal、example 和没有 profile 元数据的旧来源，profile overlay 也不能重新注入这些记录。项目自己的发布日志不会被清理；自定义日志目录须在来源 profile 的 `exclude` 中显式声明，不按文件名中含有 release 字样进行模糊过滤。 发布新脚手架版本时，`minGeneratorVersion` 必须声明包含该过滤规则的 CLI；历史 Tag 和 catalog 不追溯改写。
 
 使用版本目录中的默认版本和默认 `minimal` profile，输出目录默认为项目名：
 

@@ -128,7 +128,41 @@ func (a *App) newCICommand() *cobra.Command {
 		return err
 	}}
 	inspectCommand.Flags().StringVar(&inspectDir, "dir", ".", "project directory")
-	command.AddCommand(initCommand, inspectCommand)
+	// 🔄4.注册仅更新来源一致文件的受约束入口
+	var updateDir, updateVersion string
+	var updateDryRun bool
+	updateCommand := &cobra.Command{Use: "update", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		updateRepository := repository
+		if !cmd.Flags().Changed("ci-repository") && !cmd.InheritedFlags().Changed("ci-repository") {
+			updateRepository = ""
+		}
+		report, err := a.UpdateCI(cmd.Context(), updateRepository, updateDir, updateVersion, updateDryRun)
+		report = BuildCIFailureReport(report, err, updateVersion)
+		if report != nil {
+			if outputErr := a.WriteCIReport(*report); outputErr != nil {
+				return outputErr
+			}
+		}
+		return err
+	}}
+	updateCommand.Flags().StringVar(&updateDir, "dir", ".", "Git worktree root")
+	updateCommand.Flags().StringVar(&updateVersion, "ci-version", "", "explicit target CI version")
+	updateCommand.Flags().BoolVar(&updateDryRun, "dry-run", false, "preview without writing project files")
+	// 📝5.显式确认人工合并后的项目定制，不覆盖原版来源
+	var customDir, customPath, customReason string
+	customCommand := &cobra.Command{Use: "customize", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		report, err := RecordCICustomization(customDir, customPath, customReason)
+		if report != nil {
+			if outputErr := a.WriteCIReport(*report); outputErr != nil {
+				return outputErr
+			}
+		}
+		return err
+	}}
+	customCommand.Flags().StringVar(&customDir, "dir", ".", "project root")
+	customCommand.Flags().StringVar(&customPath, "path", "", "explicit installed asset reviewed by the operator")
+	customCommand.Flags().StringVar(&customReason, "reason", "", "review reason (do not include secrets)")
+	command.AddCommand(initCommand, inspectCommand, updateCommand, customCommand)
 	return command
 }
 
@@ -357,7 +391,7 @@ func ValidateCIPath(name string) error {
 			return fmt.Errorf("ambiguous CI path %q", name)
 		}
 	}
-	if name == ".gitlab-ci.yml" || name == ".gitlab/schedules.yml" || strings.HasPrefix(name, ".gitlab/security/") || strings.HasPrefix(name, "scripts/security/") {
+	if name == ".gitlab-ci.yml" || name == ".gitlab/schedules.yml" || strings.HasPrefix(name, ".gitlab/security/") || strings.HasPrefix(name, "scripts/security/") || strings.HasPrefix(name, ".gitlab/release/") || strings.HasPrefix(name, "scripts/release/") {
 		return nil
 	}
 	return fmt.Errorf("path outside CI installation scope: %s", name)
@@ -365,7 +399,7 @@ func ValidateCIPath(name string) error {
 
 // ResolveCIPath 验证目标所有父组件，拒绝符号链接和大小写别名。
 func ResolveCIPath(root, name string) (string, error) {
-	if name != ciInstallationPath {
+	if name != ciInstallationPath && name != ciCustomizationsPath {
 		if err := ValidateCIPath(name); err != nil {
 			return "", err
 		}
@@ -489,22 +523,22 @@ func FetchCIInstallation(dir string) (*CIInstallation, error) {
 	return &installation, nil
 }
 
-// InstallCI 在完整预检后补装资产；不接管 scaffold，也不执行外部管理动作。
-func (a *App) InstallCI(ctx context.Context, repository, dir, version string, dryRun bool) (*CIReport, error) {
+// FetchCIRelease 锁定目录、annotated tag 与完整来源清单；旧来源允许已停用状态，仅用于核验。
+func (a *App) FetchCIRelease(ctx context.Context, repository, version string, allowInactive bool) (CIInstallation, string, error) {
 	// 🔍1.锁定显式版本及已校验的资产来源
 	if version == "" {
-		return nil, fmt.Errorf("--ci-version is required")
+		return CIInstallation{}, "", fmt.Errorf("--ci-version is required")
 	}
 	if err := ValidateVersion(version); err != nil {
-		return nil, &ExitError{Code: ExitUnsupported, Err: fmt.Errorf("validate CI version: %w", err)}
+		return CIInstallation{}, "", &ExitError{Code: ExitUnsupported, Err: fmt.Errorf("validate CI version: %w", err)}
 	}
 	repository, err := NormalizeCIRepository(repository)
 	if err != nil {
-		return nil, err
+		return CIInstallation{}, "", err
 	}
 	source, catalog, err := a.FetchCICatalog(ctx, repository)
 	if err != nil {
-		return nil, err
+		return CIInstallation{}, "", err
 	}
 	var selected *CIRelease
 	for _, release := range catalog.Releases {
@@ -514,31 +548,43 @@ func (a *App) InstallCI(ctx context.Context, repository, dir, version string, dr
 			break
 		}
 	}
-	if selected == nil || selected.Status != "active" {
-		return nil, &ExitError{Code: ExitUnsupported, Err: fmt.Errorf("CI version %s is not active", version)}
+	if selected == nil || (!allowInactive && selected.Status != "active") {
+		return CIInstallation{}, "", &ExitError{Code: ExitUnsupported, Err: fmt.Errorf("CI version %s is not active", version)}
 	}
 	if !a.Options.AllowPrerelease && strings.Contains(version, "-") {
-		return nil, &ExitError{Code: ExitUnsupported, Err: fmt.Errorf("prerelease CI requires --allow-prerelease")}
+		return CIInstallation{}, "", &ExitError{Code: ExitUnsupported, Err: fmt.Errorf("prerelease CI requires --allow-prerelease")}
 	}
 	if CompareVersion(FetchGeneratorVersion(), selected.MinGeneratorVersion) < 0 {
-		return nil, &ExitError{Code: ExitIncompatible, Err: fmt.Errorf("CI %s requires CLI %s", version, selected.MinGeneratorVersion)}
+		return CIInstallation{}, "", &ExitError{Code: ExitIncompatible, Err: fmt.Errorf("CI %s requires CLI %s", version, selected.MinGeneratorVersion)}
 	}
 	sourceDir, revision, err := source.FetchReleaseSource(ctx, Release{Version: version, Revision: selected.Revision})
 	if err != nil {
-		return nil, fmt.Errorf("fetch CI release: %w", err)
+		return CIInstallation{}, "", fmt.Errorf("fetch CI release: %w", err)
 	}
 	bundleDir := filepath.Join(sourceDir, ciBundleDirectory)
 	manifestData, err := source.FetchGit(ctx, source.Options.Repository, "show", "refs/tags/"+version+":"+ciBundleDirectory+"/bundle.yaml")
 	if err != nil {
-		return nil, fmt.Errorf("read CI bundle: %w", err)
+		return CIInstallation{}, "", fmt.Errorf("read CI bundle: %w", err)
 	}
 	var bundle CIBundle
 	if err := DecodeCIYAML(manifestData, &bundle); err != nil {
-		return nil, fmt.Errorf("parse CI bundle: %w", err)
+		return CIInstallation{}, "", fmt.Errorf("parse CI bundle: %w", err)
 	}
 	if err := ValidateCIBundle(bundle); err != nil {
-		return nil, err
+		return CIInstallation{}, "", err
 	}
+
+	return CIInstallation{SchemaVersion: 1, Repository: repository, Version: version, Revision: revision, Bundle: bundle}, bundleDir, nil
+}
+
+// InstallCI 在完整预检后补装资产；不接管 scaffold，也不执行外部管理动作。
+func (a *App) InstallCI(ctx context.Context, repository, dir, version string, dryRun bool) (*CIReport, error) {
+	installation, bundleDir, err := a.FetchCIRelease(ctx, repository, version, false)
+	if err != nil {
+		return nil, fmt.Errorf("resolve CI release: %w", err)
+	}
+	repository = installation.Repository
+	bundle, revision := installation.Bundle, installation.Revision
 
 	// 🛡️2.检查项目兼容性及所有文件冲突，预览阶段不写入项目
 	dir, err = filepath.Abs(dir)
@@ -554,7 +600,6 @@ func (a *App) InstallCI(ctx context.Context, repository, dir, version string, dr
 	if err != nil {
 		return report, &ExitError{Code: ExitConflict, Err: err}
 	}
-	installation := CIInstallation{SchemaVersion: 1, Repository: repository, Version: version, Revision: revision, Bundle: bundle}
 	if current != nil {
 		oldJSON, _ := json.Marshal(current)
 		newJSON, _ := json.Marshal(installation)
@@ -714,6 +759,10 @@ func InspectCI(dir string) (*CIReport, error) {
 	if installation == nil {
 		return nil, &ExitError{Code: ExitUnsupported, Err: fmt.Errorf("CI installation record not found")}
 	}
+	customizations, err := FetchCICustomizations(dir, *installation)
+	if err != nil {
+		return nil, fmt.Errorf("read CI customization approvals: %w", err)
+	}
 	report := &CIReport{Version: installation.Version, Revision: installation.Revision, Status: "complete", Changes: []CIChange{}}
 	for _, file := range installation.Bundle.Files {
 		status := "same"
@@ -734,15 +783,22 @@ func InspectCI(dir string) (*CIReport, error) {
 				mode, _ := strconv.ParseUint(file.Mode, 8, 32)
 				if FetchSHA256(data) != file.SHA256 || (info.Mode().Perm() != os.FileMode(mode) && os.PathSeparator != '\\') {
 					status = "modified"
+					if custom, ok := customizations[file.Path]; ok && FetchSHA256(data) == custom.AcceptedSHA256 && fmt.Sprintf("%04o", info.Mode().Perm()) == custom.Mode {
+						status = "customized"
+					}
 				}
 			}
 		}
-		if status != "same" {
+		if status == "customized" {
+			if report.Status == "complete" {
+				report.Status = "customized"
+			}
+		} else if status != "same" {
 			report.Status = "drifted"
 		}
 		report.Changes = append(report.Changes, CIChange{Path: file.Path, Status: status})
 	}
-	if report.Status != "complete" {
+	if report.Status == "drifted" {
 		return report, &ExitError{Code: ExitConflict, Err: fmt.Errorf("installed CI files have drifted")}
 	}
 	return report, nil
