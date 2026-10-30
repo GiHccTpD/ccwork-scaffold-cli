@@ -13,9 +13,10 @@ import (
 
 // RenderInput 是生成项目所需的结构化输入。
 type RenderInput struct {
-	Name    string
-	Module  string
-	Profile string
+	Name        string
+	Module      string
+	Profile     string
+	CIReference []byte
 }
 
 // RenderProject 将 scaffold 源码复制并按明确文件规则渲染到目标目录。
@@ -38,7 +39,7 @@ func RenderProject(source, target string, input RenderInput) error {
 		if rel == "." {
 			return nil
 		}
-		if shouldSkipSource(rel) || shouldExcludeProfilePath(profile, rel) {
+		if shouldSkipSource(rel) || shouldExcludeProfilePath(profile, rel) || (len(input.CIReference) > 0 && shouldSkipCIImplementation(rel)) {
 			if entry.IsDir() {
 				return fs.SkipDir
 			}
@@ -69,6 +70,11 @@ func RenderProject(source, target string, input RenderInput) error {
 	}
 	if err := applyProfileOverlays(source, target, input, profile); err != nil {
 		return err
+	}
+	if len(input.CIReference) > 0 {
+		if err := os.WriteFile(filepath.Join(target, ".gitlab-ci.yml"), input.CIReference, 0o644); err != nil {
+			return fmt.Errorf("write runtime CI reference: %w", err)
+		}
 	}
 	return nil
 }
@@ -173,7 +179,7 @@ func applyProfileOverlays(source, target string, input RenderInput, profile *Pro
 		return nil
 	}
 	for _, overlay := range profile.Overlays {
-		if shouldSkipReleaseSource(overlay.Target) {
+		if shouldSkipReleaseSource(overlay.Target) || (len(input.CIReference) > 0 && shouldSkipCIImplementation(overlay.Target)) {
 			continue
 		}
 		data, err := os.ReadFile(filepath.Join(source, filepath.FromSlash(overlay.Source)))

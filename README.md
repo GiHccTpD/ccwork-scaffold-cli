@@ -344,3 +344,18 @@ git diff --check
 ```
 
 `upgrade` 只接受声明式迁移白名单操作。冲突在内存计划阶段报告，正式写入要求项目位于独立且干净的 Git worktree。
+
+## 运行时引用共享 CI（新增能力）
+
+`ci reference` 仅输出配置，不覆盖业务工程，不执行下载的脚本或 GitLab 管理 API。它复用正式 catalog、annotated tag、完整 revision、active 状态和最低 CLI 校验；没有 `runtime/go-security.yml` 的版本明确拒绝。输出的 include 和资产下载固定同一 SHA，不跟随 main。
+
+```bash
+ccwork-scaffold-cli ci reference --ci-version "$CI_VERSION" \
+  --local-config .gitlab/ci-runtime-overrides.yml > /private/tmp/project-runtime.yml
+```
+
+`--ci-project` 默认 `ccwork/go/ops-pipelines`，指定同一 GitLab 实例中的可信项目路径；`--ci-repository` 仍指正式来源。人工合并前核对二者对应关系，按项目评审切换入口及清理旧副本，不伪造安装记录。离线 `ci inspect` 对引用返回 referenced，仅检查本地模板/资产 SHA 和项目一致，不声称已验收正式来源、配置合并、权限或 Runner。副本模式仍按原逻辑检查 complete/customized/drifted。
+
+新建工程可使用 `new --ci-mode reference --ci-version "$CI_VERSION"`（同时支持 `--ci-project`、`--ci-repository`），渲染前校验正式来源，跳过 scripts/security、scripts/release、.gitlab/security、.gitlab/release 和旧安装/定制身份，写入薄入口，保留项目 Schedule 和业务脚本。默认 ci-mode=copy 保持兼容。两个 profile 均适用，overlay 不能重新注入共享副本。
+
+此能力需随新 CLI 发布；本机 PATH 中旧二进制不会因源码修改而更新。现有 CI v0.1.0/v0.2.0 不含运行时入口，必须先发布新的共享版本。

@@ -162,7 +162,7 @@ func (a *App) newCICommand() *cobra.Command {
 	customCommand.Flags().StringVar(&customDir, "dir", ".", "project root")
 	customCommand.Flags().StringVar(&customPath, "path", "", "explicit installed asset reviewed by the operator")
 	customCommand.Flags().StringVar(&customReason, "reason", "", "review reason (do not include secrets)")
-	command.AddCommand(initCommand, inspectCommand, updateCommand, customCommand)
+	command.AddCommand(initCommand, inspectCommand, updateCommand, customCommand, a.newCIReferenceCommand(&repository))
 	return command
 }
 
@@ -757,7 +757,7 @@ func InspectCI(dir string) (*CIReport, error) {
 		return nil, err
 	}
 	if installation == nil {
-		return nil, &ExitError{Code: ExitUnsupported, Err: fmt.Errorf("CI installation record not found")}
+		return InspectCIReference(dir)
 	}
 	customizations, err := FetchCICustomizations(dir, *installation)
 	if err != nil {

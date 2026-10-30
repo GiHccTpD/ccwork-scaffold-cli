@@ -63,6 +63,7 @@ func (a *App) newCommand() *cobra.Command {
 	var input RenderInput
 	var version, dir string
 	var noGitInit, verify bool
+	var ciMode, ciVersion, ciProject, ciRepository string
 	command := &cobra.Command{Use: "new", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		if input.Profile == "" {
 			input.Profile = "minimal"
@@ -80,6 +81,18 @@ func (a *App) newCommand() *cobra.Command {
 		if err := ValidateProject(input.Name, input.Module, input.Profile); err != nil {
 			return err
 		}
+		if ciMode != "copy" && ciMode != "reference" {
+			return fmt.Errorf("ci-mode must be copy or reference")
+		}
+		if ciMode == "reference" {
+			var err error
+			input.CIReference, err = a.FetchCIReference(cmd.Context(), ciRepository, ciVersion, ciProject, "")
+			if err != nil {
+				return err
+			}
+		} else if ciVersion != "" {
+			return fmt.Errorf("ci-version requires ci-mode reference")
+		}
 		release, sourceDir, revision, err := a.FetchRelease(cmd.Context(), version)
 		if err != nil {
 			return err
@@ -96,6 +109,10 @@ func (a *App) newCommand() *cobra.Command {
 	command.Flags().StringVar(&dir, "dir", "", "target directory, defaults to name")
 	command.Flags().BoolVar(&noGitInit, "no-git-init", false, "do not initialize a Git repository")
 	command.Flags().BoolVar(&verify, "verify", false, "run go test, go build and git diff --check")
+	command.Flags().StringVar(&ciMode, "ci-mode", "copy", "CI integration: copy (compatible default) or reference")
+	command.Flags().StringVar(&ciVersion, "ci-version", "", "published runtime CI version; required for reference mode")
+	command.Flags().StringVar(&ciProject, "ci-project", "ccwork/go/ops-pipelines", "GitLab shared CI project path")
+	command.Flags().StringVar(&ciRepository, "ci-repository", defaultCIRepository, "CI source repository for reference mode")
 	return command
 }
 
