@@ -65,7 +65,7 @@ ccwork-scaffold-cli ci init --dir ../legacy-service --ci-version v0.2.0
 ccwork-scaffold-cli ci inspect --dir ../legacy-service
 ```
 
-`ci --ci-repository <路径或无凭据URL>` 指定独立来源，默认 `https://git.inspur.com/ccwork/go/ops-pipelines.git`，不影响全局 `--repository`。支持全局 `--output json`、`--cache-dir`、`--offline` 和 `--allow-prerelease`。清单 minGoVersion 指扫描运行环境要求，不强制提高老项目的 Go 语言版本；项目请求的 Go/toolchain 不得高于固定镜像。来源根目录为 `ci-releases.yaml`，资产清单为 `bundles/go-security/bundle.yaml`；仅 active 正式版本可安装，须满足最低 CLI。
+`ci --ci-repository <路径或无凭据URL>` 指定独立来源，默认 `https://git.inspur.com/ccwork/devops/ops-pipelines.git`，不影响全局 `--repository`。支持全局 `--output json`、`--cache-dir`、`--offline` 和 `--allow-prerelease`。清单 minGoVersion 指扫描运行环境要求，不强制提高老项目的 Go 语言版本；项目请求的 Go/toolchain 不得高于固定镜像。来源根目录为 `ci-releases.yaml`，资产清单为 `bundles/go-security/bundle.yaml`；仅 active 正式版本可安装，须满足最低 CLI。
 
 - `init` 必须明确 `--ci-version`；正式执行要求独立、干净的 Git worktree、根 go.mod 及与镜像兼容的 Go/toolchain 声明。首期只支持根 Go module。
 - dry-run 不写入目标项目，报告 add/same/conflict/incompatible。冲突整次不写入；相同版本和文件重复执行无变化。init 不覆盖已有不同版本；CLI v0.2.0 起使用下述受约束 update，仍不合并任意 YAML。
@@ -354,7 +354,9 @@ ccwork-scaffold-cli ci reference --ci-version "$CI_VERSION" \
   --local-config .gitlab/ci-runtime-overrides.yml > /private/tmp/project-runtime.yml
 ```
 
-`--ci-project` 默认 `ccwork/go/ops-pipelines`，指定同一 GitLab 实例中的可信项目路径；`--ci-repository` 仍指正式来源。人工合并前核对二者对应关系，按项目评审切换入口及清理旧副本，不伪造安装记录。离线 `ci inspect` 对引用返回 referenced，仅检查本地模板/资产 SHA 和项目一致，不声称已验收正式来源、配置合并、权限或 Runner。副本模式仍按原逻辑检查 complete/customized/drifted。
+`--ci-project` 默认 `ccwork/devops/ops-pipelines`，指定同一 GitLab 实例中的可信项目路径；`--ci-repository` 仍指正式来源。人工合并前核对二者对应关系，按项目评审切换入口及清理旧副本，不伪造安装记录。离线 `ci inspect` 对引用返回 referenced，仅检查本地模板/资产 SHA 和项目一致，不声称已验收正式来源、配置合并、权限或 Runner。副本模式仍按原逻辑检查 complete/customized/drifted。
+
+共享资产默认以 `CI_JOB_TOKEN` 拉取固定 revision 归档；部分实例（如 GitLab 18.11.12-ee）跨项目 archive 对 Job Token 返回 404。此时在项目 overrides（`--local-config` 指向的 YAML，如 `.gitlab/ci-runtime-overrides.yml`）的 `variables` 中配置 `OPS_PIPELINES_READ_TOKEN: "$GITLAB_READ_TOKEN"`，引用既有只读凭据（如组级 Masked `GITLAB_READ_TOKEN`）；不得在 YAML 写入真实凭据，也不为 MR 放宽受保护变量。`ci reference` 生成入口的注释与 `ci inspect` 的 requirements 均携带此提示，最终以 `fetch-ops-pipelines` 任务实际成功为准。
 
 新建工程可使用 `new --ci-mode reference --ci-version "$CI_VERSION"`（同时支持 `--ci-project`、`--ci-repository`），渲染前校验正式来源，跳过 scripts/security、scripts/release、.gitlab/security、.gitlab/release 和旧安装/定制身份，写入薄入口，保留项目 Schedule 和业务脚本。默认 ci-mode=copy 保持兼容。两个 profile 均适用，overlay 不能重新注入共享副本。
 

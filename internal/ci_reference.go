@@ -23,8 +23,8 @@ func (a *App) newCIReferenceCommand(repository *string) *cobra.Command {
 		return a.WriteReport(map[string]string{"configuration": string(data)}, string(data))
 	}}
 	command.Flags().StringVar(&version, "ci-version", "", "explicit published CI version with runtime support")
-	command.Flags().StringVar(&project, "ci-project", "ccwork/go/ops-pipelines", "GitLab project path on the same instance")
-	command.Flags().StringVar(&localConfig, "local-config", "", "optional project-owned YAML to include after shared configuration")
+	command.Flags().StringVar(&project, "ci-project", defaultCISourceProject, "GitLab project path on the same instance")
+	command.Flags().StringVar(&localConfig, "local-config", "", "project overrides YAML included after shared configuration; configure OPS_PIPELINES_READ_TOKEN there when cross-project archive rejects CI_JOB_TOKEN")
 	return command
 }
 
@@ -75,7 +75,13 @@ func (a *App) FetchCIReference(ctx context.Context, repository, version, project
 	if err != nil {
 		return nil, fmt.Errorf("render runtime CI reference: %w", err)
 	}
-	return data, nil
+	// 📨4.附上共享资产读取凭据兼容提示：部分实例（如 GitLab 18.11.12-ee）跨项目 archive 对 CI_JOB_TOKEN 返回 404
+	hint := "# 共享资产默认以 CI_JOB_TOKEN 拉取固定 revision 归档；若实例跨项目 archive 返回 404（GitLab 18.11.12-ee 已观测），\n" +
+		"# 在项目 overrides（--local-config 指向的 YAML，如 .gitlab/ci-runtime-overrides.yml）的 variables 中配置：\n" +
+		"#   OPS_PIPELINES_READ_TOKEN: \"$GITLAB_READ_TOKEN\"\n" +
+		"# 引用既有只读凭据（如组级 Masked GITLAB_READ_TOKEN）；不要在 YAML 写入真实凭据，也不为 MR 放宽受保护变量，\n" +
+		"# 最终以 fetch-ops-pipelines 任务实际成功为准。\n"
+	return append([]byte(hint), data...), nil
 }
 
 // InspectCIReference 离线检查配置与资产 SHA 一致，真实权限和执行结果另行验收。
@@ -107,7 +113,11 @@ func InspectCIReference(dir string) (*CIReport, error) {
 	if !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(revision) || config.Variables["OPS_PIPELINES_REVISION"] != revision || config.Variables["OPS_PIPELINES_PROJECT"] != reference["project"] {
 		return nil, &ExitError{Code: ExitConflict, Err: fmt.Errorf("runtime CI template and assets must reference the same full SHA and project")}
 	}
-	return &CIReport{Revision: revision, Status: "referenced", Changes: []CIChange{}, Requirements: []string{"仅核对本地引用；正式来源、合并配置、跨仓库权限及真实 Pipeline 尚需验收"}}, nil
+	requirements := []string{
+		"仅核对本地引用；正式来源、合并配置、跨仓库权限及真实 Pipeline 尚需验收。",
+		"共享资产默认以 CI_JOB_TOKEN 拉取；若实例跨项目 archive 返回 404，需在项目 overrides 配置 OPS_PIPELINES_READ_TOKEN 引用既有只读凭据，并以 fetch-ops-pipelines 任务实际成功为准。",
+	}
+	return &CIReport{Revision: revision, Status: "referenced", Changes: []CIChange{}, Requirements: requirements}, nil
 }
 
 // shouldSkipCIImplementation 识别运行时模式无需复制的共享实现与旧安装身份。
