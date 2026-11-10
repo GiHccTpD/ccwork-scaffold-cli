@@ -52,6 +52,9 @@ func TestCIReferencePinsSourceWithoutWriting(t *testing.T) {
 	if config.Variables["OPS_PIPELINES_REVISION"] != revision || config.Variables["OPS_PIPELINES_PROJECT"] != "group/ops-pipelines" {
 		t.Fatalf("unpinned assets: %+v", config.Variables)
 	}
+	if !strings.Contains(out, "OPS_PIPELINES_READ_TOKEN") || !strings.Contains(out, "$GITLAB_READ_TOKEN") {
+		t.Fatal("read token compatibility hint missing from generated reference")
+	}
 	if _, err := os.Stat(filepath.Join(target, ".gitlab-ci.yml")); !os.IsNotExist(err) {
 		t.Fatal("reference wrote target project")
 	}
@@ -110,6 +113,15 @@ func TestInspectCIReference(t *testing.T) {
 	report, err := InspectCI(target)
 	if err != nil || report.Status != "referenced" {
 		t.Fatalf("reference inspection: %+v %v", report, err)
+	}
+	hinted := false
+	for _, requirement := range report.Requirements {
+		if strings.Contains(requirement, "OPS_PIPELINES_READ_TOKEN") {
+			hinted = true
+		}
+	}
+	if !hinted {
+		t.Fatalf("inspection requirements missing read token guidance: %+v", report.Requirements)
 	}
 	writeCIFixtureFile(t, target, ".gitlab-ci.yml", []byte(strings.Replace(out, "OPS_PIPELINES_REVISION:", "DIFFERENT_REVISION:", 1)))
 	if _, err := InspectCI(target); err == nil {

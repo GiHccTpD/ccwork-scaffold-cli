@@ -20,7 +20,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const defaultCIRepository = "https://git.inspur.com/ccwork/go/ops-pipelines.git"
+// defaultCIRepository 与 defaultCISourceProject 指向共享 CI 资产的正式来源。
+// 注意：真实路径为 ccwork/devops/ops-pipelines；早期文档中的 ccwork/go/ops-pipelines 在实例上不存在。
+const defaultCIRepository = "https://git.inspur.com/ccwork/devops/ops-pipelines.git"
+const defaultCISourceProject = "ccwork/devops/ops-pipelines"
 const ciInstallationPath = ".gitlab/ci-installation.yaml"
 const ciBundleDirectory = "bundles/go-security"
 

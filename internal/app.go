@@ -111,7 +111,7 @@ func (a *App) newCommand() *cobra.Command {
 	command.Flags().BoolVar(&verify, "verify", false, "run go test, go build and git diff --check")
 	command.Flags().StringVar(&ciMode, "ci-mode", "copy", "CI integration: copy (compatible default) or reference")
 	command.Flags().StringVar(&ciVersion, "ci-version", "", "published runtime CI version; required for reference mode")
-	command.Flags().StringVar(&ciProject, "ci-project", "ccwork/go/ops-pipelines", "GitLab shared CI project path")
+	command.Flags().StringVar(&ciProject, "ci-project", defaultCISourceProject, "GitLab shared CI project path")
 	command.Flags().StringVar(&ciRepository, "ci-repository", defaultCIRepository, "CI source repository for reference mode")
 	return command
 }
