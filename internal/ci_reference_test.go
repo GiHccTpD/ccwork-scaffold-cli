@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,6 +10,126 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+// TestProjectReferencePreservesRuntimeModules 验证生成不会丢失模板的构建/Helm 模块或静默降级。
+func TestProjectReferencePreservesRuntimeModules(t *testing.T) {
+	ci, _, cache := createRuntimeCIFixture(t)
+	oldRevision := runCITestGit(t, ci, "rev-parse", "v0.2.0^{commit}")
+	for _, name := range []string{"container-build", "helm-handoff"} {
+		writeCIFixtureFile(t, ci, "runtime/"+name+".yml", []byte("variables: {}\n"))
+	}
+	runCITestGit(t, ci, "add", ".")
+	runCITestGit(t, ci, "commit", "-m", "runtime modules fixture")
+	runCITestGit(t, ci, "tag", "-a", "v0.3.0", "-m", "modules fixture")
+	revision := runCITestGit(t, ci, "rev-parse", "HEAD")
+	catalog := CICatalog{
+		SchemaVersion:  1,
+		DefaultVersion: "v0.3.0",
+		Releases: []CIRelease{
+			{
+				Version:             "v0.2.0",
+				Revision:            oldRevision,
+				Status:              "active",
+				MinGeneratorVersion: "v0.0.1",
+			},
+			{
+				Version:             "v0.3.0",
+				Revision:            revision,
+				Status:              "active",
+				MinGeneratorVersion: "v0.0.1",
+			},
+		},
+	}
+	data, err := json.Marshal(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeCIFixtureFile(t, ci, "ci-releases.yaml", data)
+	runCITestGit(t, ci, "add", ".")
+	runCITestGit(t, ci, "commit", "-m", "module catalog fixture")
+
+	source, target := t.TempDir(), t.TempDir()
+	config := struct {
+		Include   []map[string]string `yaml:"include"`
+		Variables map[string]string   `yaml:"variables"`
+	}{Variables: map[string]string{
+		"OPS_PIPELINES_PROJECT":  "old/ops-pipelines",
+		"OPS_PIPELINES_REVISION": strings.Repeat("a", 40),
+	}}
+	for _, name := range []string{"go-security", "container-build", "helm-handoff"} {
+		config.Include = append(config.Include, map[string]string{
+			"project": "old/ops-pipelines",
+			"ref":     strings.Repeat("a", 40),
+			"file":    "/runtime/" + name + ".yml",
+		})
+	}
+	for _, name := range []string{"ci-runtime-overrides", "ci-build", "ci-helm"} {
+		config.Include = append(config.Include, map[string]string{"local": "/.gitlab/" + name + ".yml"})
+		writeTestFile(t, source, ".gitlab/"+name+".yml", "variables:\n  PROJECT_FLAG: keep\n")
+	}
+	data, err = yaml.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, source, ".gitlab-ci.yml", string(data))
+	app := &App{Options: Options{CacheDir: cache}}
+	for _, version := range []string{"v0.3.0", "v0.2.0"} {
+		base, err := app.FetchCIReference(context.Background(), ci, version, "group/ops-pipelines", defaultCIRuntimeOverridesPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		output, err := app.FetchProjectCIReference(context.Background(), ci, "group/ops-pipelines", source, base)
+		if version == "v0.2.0" {
+			if err == nil || !strings.Contains(err.Error(), "required runtime module") {
+				t.Fatalf("missing modules not rejected: %v", err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := yaml.Unmarshal(output, &config); err != nil {
+			t.Fatal(err)
+		}
+		if len(config.Include) != 6 {
+			t.Fatalf("runtime modules or local configs lost: %+v", config.Include)
+		}
+		for _, include := range config.Include[:3] {
+			if include["project"] != "group/ops-pipelines" || include["ref"] != revision {
+				t.Fatalf("runtime source not repinned: %+v", include)
+			}
+		}
+		if err := RenderProject(source, target, RenderInput{
+			Name:        "runtime-service",
+			Module:      "example.invalid/runtime",
+			Profile:     "minimal",
+			CIReference: output,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := InspectCI(target); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"ci-runtime-overrides", "ci-build", "ci-helm"} {
+			assertFileEquals(t, filepath.Join(target, ".gitlab/"+name+".yml"), "variables:\n  PROJECT_FLAG: keep\n")
+		}
+		if err := os.Remove(filepath.Join(target, ".gitlab/ci-helm.yml")); err != nil {
+			t.Fatal(err)
+		}
+		if err := ValidateCILocalIncludes(target, output); err == nil {
+			t.Fatal("missing local Helm parameters accepted")
+		}
+		config.Include[1]["ref"] = strings.Repeat("b", 40)
+		data, err = yaml.Marshal(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeTestFile(t, target, ".gitlab-ci.yml", string(data))
+		if _, err := InspectCI(target); err == nil {
+			t.Fatal("mixed runtime revisions accepted")
+		}
+	}
+}
 
 // createRuntimeCIFixture 为运行时引用建立独立的本地正式来源 fixture。
 func createRuntimeCIFixture(t *testing.T) (string, string, string) {
@@ -145,7 +266,10 @@ func TestCommandNewWithCIReference(t *testing.T) {
 	runCITestGit(t, source, "commit", "-m", "catalog fixture")
 	for _, profile := range []string{"minimal", "example"} {
 		target := filepath.Join(t.TempDir(), "runtime-service")
-		args := []string{"--repository", source, "--cache-dir", cache, "new", "--name", "runtime-service", "--module", "example.invalid/runtime", "--dir", target, "--profile", profile, "--no-git-init", "--ci-mode", "reference", "--ci-version", "v0.2.0", "--ci-repository", ci}
+		args := []string{"--repository", source, "--cache-dir", cache, "new", "--name", "runtime-service", "--module", "example.invalid/runtime", "--dir", target, "--profile", profile, "--no-git-init", "--ci-version", "v0.2.0", "--ci-repository", ci}
+		if profile == "example" {
+			args = append(args, "--ci-mode", "reference")
+		}
 		if out, err := executeCICommand(args...); err != nil {
 			t.Fatalf("new reference: %v %s", err, out)
 		}
@@ -154,6 +278,89 @@ func TestCommandNewWithCIReference(t *testing.T) {
 		}
 		if report, err := InspectCI(target); err != nil || report.Status != "referenced" {
 			t.Fatalf("generated reference: %+v %v", report, err)
+		}
+		var config struct {
+			Include []map[string]string `yaml:"include"`
+		}
+		data, err := os.ReadFile(filepath.Join(target, ".gitlab-ci.yml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := yaml.Unmarshal(data, &config); err != nil {
+			t.Fatal(err)
+		}
+		if len(config.Include) != 2 || config.Include[1]["local"] != "/.gitlab/ci-runtime-overrides.yml" {
+			t.Fatalf("project overrides are not included: %+v", config.Include)
+		}
+		assertFileContains(t, filepath.Join(target, ".gitlab/ci-runtime-overrides.yml"),
+			`OPS_PIPELINES_READ_TOKEN: "$GITLAB_READ_TOKEN"`)
+	}
+	for _, version := range []string{"", "v9.0.0"} {
+		target := filepath.Join(t.TempDir(), "unpublished")
+		_, err := executeCICommand(
+			"--repository", source, "--cache-dir", cache, "new",
+			"--name", "runtime-service", "--module", "example.invalid/runtime",
+			"--dir", target, "--ci-version", version,
+			"--ci-repository", ci,
+		)
+		if err == nil {
+			t.Fatalf("unpublished CI version accepted: %q", version)
+		}
+		if _, err := os.Stat(target); !os.IsNotExist(err) {
+			t.Fatalf("failed generation wrote target: %v", err)
+		}
+	}
+}
+
+// TestRenderReferenceKeepsProjectOverrides 验证旧模板补齐项目配置，已有差异不被覆盖。
+func TestRenderReferenceKeepsProjectOverrides(t *testing.T) {
+	for _, profile := range []string{"minimal", "example"} {
+		for _, testCase := range []struct {
+			name     string
+			existing string
+		}{
+			{name: "missing"},
+			{name: "existing", existing: "variables:\n  PROJECT_SETTING: keep\n"},
+		} {
+			t.Run(profile+"/"+testCase.name, func(t *testing.T) {
+				source, target := t.TempDir(), t.TempDir()
+				existing := testCase.existing
+				if existing != "" {
+					writeCIFixtureFile(t, source, ".gitlab/ci-runtime-overrides.yml", []byte(existing))
+				}
+				input := RenderInput{
+					Name:        "runtime-service",
+					Module:      "example.invalid/runtime",
+					Profile:     profile,
+					CIReference: []byte("include: []\n"),
+				}
+				if err := RenderProject(source, target, input); err != nil {
+					t.Fatal(err)
+				}
+				output := filepath.Join(target, ".gitlab/ci-runtime-overrides.yml")
+				if existing != "" {
+					assertFileEquals(t, output, existing)
+					return
+				}
+				data, err := os.ReadFile(output)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var config struct {
+					Variables map[string]string `yaml:"variables"`
+				}
+				if err := yaml.Unmarshal(data, &config); err != nil {
+					t.Fatal(err)
+				}
+				for _, name := range []string{"TAG_PIPELINE_ENABLED", "RELEASE_NOTES_ENABLED", "RELEASE_PUBLISH_ENABLED"} {
+					if config.Variables[name] != "false" {
+						t.Errorf("%s must default to false", name)
+					}
+				}
+				if config.Variables["OPS_PIPELINES_READ_TOKEN"] != "$GITLAB_READ_TOKEN" {
+					t.Fatal("missing read-token reference")
+				}
+			})
 		}
 	}
 }

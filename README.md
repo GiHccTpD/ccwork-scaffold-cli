@@ -148,24 +148,29 @@ ccwork-scaffold-cli \
 | `--module <module>` | 是 | - | 新项目的 Go module 路径，例如 `git.inspur.com/ccwork/service/order-service`。 |
 | `--profile <minimal\|example>` | 否 | `minimal` | 选择生成 profile；`minimal` 用于生产最小骨架，`example` 保留示例业务代码。 |
 | `--scaffold-version <version>` | 否 | 版本目录的 `defaultVersion` | 显式指定要使用的 scaffold 版本，例如 `v0.2.0`。目标版本必须处于 `active` 状态且允许创建。 |
+| `--ci-mode <reference\|copy>` | 否 | `reference` | 新版默认集中引用；copy 仅显式兼容旧用途，团队新工程不采用。 |
+| `--ci-version <version>` | reference 时必填 | 无 | 包含 runtime 的 active 正式 CI 版本，与 scaffold 版本分别选择。 |
+| `--ci-project <path>` | 否 | `ccwork/devops/ops-pipelines` | 同一 GitLab 实例的共享项目。 |
+| `--ci-repository <path-or-url>` | 否 | `https://git.inspur.com/ccwork/devops/ops-pipelines.git` | 独立 CI 正式来源，支持已核验的本地仓库。 |
 | `--dir <dir>` | 否 | `--name` 的值 | 指定目标目录。目录必须不存在或为空，CLI 不会覆盖非空目录。 |
 | `--no-git-init` | 否 | `false` | 不在生成项目中执行 `git init`。CLI 无论如何都不会自动 commit 或 push。 |
 | `--verify` | 否 | `false` | 生成期间依次运行 `go test ./...`、`go build ./...` 和 `git diff --check`；任一步失败都不会发布目标目录。 |
 
 生成项目时，发布工具和脚手架自身的发布历史分别处理（CLI v0.2.0 起）：
 
-- 保留 `scripts/release/`、`.gitlab/release/` 内的共享工具、模板和示例，以及 `docs/release.md` 操作说明。
+- reference 模式不复制 `scripts/release/`、`.gitlab/release/` 等共享实现，工具与示例从固定版本 ops-pipelines 提供；保留 `docs/release.md` 项目操作说明。显式旧 copy 模式才保留本地共享工具副本。
 - 排除根目录 `CHANGELOG`、`release-notes` 的 `.md`、`.rst`、`.txt` 文件及语言变体；排除根目录 `changelog/`、`releases/`、`release-notes/`、`reports/`，以及 `docs/changelog/`、`docs/releases/`、`docs/release-notes/`。
 - 排除来源 `releases.yaml`、兼容位置 `release/releases.yaml`、实际 `.gitlab/release-policy.json` 和 `.gitlab/ci-customizations.yaml`；新项目根据示例独立配置基线和发布历史，不继承脚手架的已发布记录。
 
 规则覆盖 minimal、example 和没有 profile 元数据的旧来源，profile overlay 也不能重新注入这些记录。项目自己的发布日志不会被清理；自定义日志目录须在来源 profile 的 `exclude` 中显式声明，不按文件名中含有 release 字样进行模糊过滤。 发布新脚手架版本时，`minGeneratorVersion` 必须声明包含该过滤规则的 CLI；历史 Tag 和 catalog 不追溯改写。
 
-使用版本目录中的默认版本和默认 `minimal` profile，输出目录默认为项目名：
+分别选择正式 scaffold 与包含 runtime 的 CI 版本，设置 `CI_VERSION` 后，使用默认 `minimal` profile；输出目录默认为项目名：
 
 ```bash
 ccwork-scaffold-cli new \
   --name order-service \
-  --module git.inspur.com/ccwork/service/order-service
+  --module git.inspur.com/ccwork/service/order-service \
+  --ci-mode reference --ci-version "$CI_VERSION"
 ```
 
 显式选择 scaffold 版本、profile 和输出目录，并在发布前执行固定验证：
@@ -176,6 +181,7 @@ ccwork-scaffold-cli new \
   --module git.inspur.com/ccwork/service/order-service \
   --profile example \
   --scaffold-version v0.2.0 \
+  --ci-mode reference --ci-version "$CI_VERSION" \
   --dir ./services/order-service \
   --verify
 ```
@@ -186,6 +192,7 @@ ccwork-scaffold-cli new \
 ccwork-scaffold-cli new \
   --name order-service \
   --module git.inspur.com/ccwork/service/order-service \
+  --ci-mode reference --ci-version "$CI_VERSION" \
   --no-git-init
 ```
 
@@ -358,6 +365,14 @@ ccwork-scaffold-cli ci reference --ci-version "$CI_VERSION" \
 
 共享资产默认以 `CI_JOB_TOKEN` 拉取固定 revision 归档；部分实例（如 GitLab 18.11.12-ee）跨项目 archive 对 Job Token 返回 404。此时在项目 overrides（`--local-config` 指向的 YAML，如 `.gitlab/ci-runtime-overrides.yml`）的 `variables` 中配置 `OPS_PIPELINES_READ_TOKEN: "$GITLAB_READ_TOKEN"`，引用既有只读凭据（如组级 Masked `GITLAB_READ_TOKEN`）；不得在 YAML 写入真实凭据，也不为 MR 放宽受保护变量。`ci reference` 生成入口的注释与 `ci inspect` 的 requirements 均携带此提示，最终以 `fetch-ops-pipelines` 任务实际成功为准。
 
-新建工程可使用 `new --ci-mode reference --ci-version "$CI_VERSION"`（同时支持 `--ci-project`、`--ci-repository`），渲染前校验正式来源，跳过 scripts/security、scripts/release、.gitlab/security、.gitlab/release 和旧安装/定制身份，写入薄入口，保留项目 Schedule 和业务脚本。默认 ci-mode=copy 保持兼容。两个 profile 均适用，overlay 不能重新注入共享副本。
+团队新建工程必须使用 `new --ci-mode reference --ci-version "$CI_VERSION"`（同时支持 `--ci-project`、`--ci-repository`），渲染前校验正式来源，跳过 scripts/security、scripts/release、.gitlab/security、.gitlab/release 和旧安装/定制身份，写入薄入口，保留项目 Schedule 和业务脚本。新版源码将 `new` 默认改为 reference，必须显式指定正式 CI 版本；兼容旧副本生成须显式 `--ci-mode copy`，不作为团队新建入口。两个 profile 均适用，overlay 不能重新注入共享副本。
+
+运行时 new 生成的根入口还会后置 include `.gitlab/ci-runtime-overrides.yml`。来源模板已有该文件时原样保留；旧模板缺失时补充项目变量默认值（包含既有读取 Token 的变量引用，Tag 流水线与 Release 写入默认关闭），不复制共享 jobs、规则或脚本。这项修复需随新 CLI 正式发布；使用旧二进制后必须检查实际产物，不能仅凭 inspect=referenced 认定 overrides 已接入。
 
 此能力需随新 CLI 发布；本机 PATH 中旧二进制不会因源码修改而更新。现有 CI v0.1.0/v0.2.0 不含运行时入口，必须先发布新的共享版本。
+
+## v0.4.0 兼容性说明
+
+`new` 默认改为 reference，必须指定 `--ci-version`；历史测试/副本用途显式传 `--ci-mode copy`。新模式自动保留模板已有的安全、容器构建和 Helm 等 runtime 模块，统一重绑到所选正式 CI project/revision，并保留后置项目参数 include。所选 CI 缺少必需模块、或渲染后本地参数文件缺失时拒绝生成，不静默移除已有能力。
+
+旧模板缺少 overrides 时补默认项目配置；已有 overrides 保留。`ci inspect` 同时检查全部 runtime 模块的 SHA/project 一致性；本地 referenced 不代替真实 Pipeline 验收。

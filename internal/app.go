@@ -71,6 +71,9 @@ func (a *App) newCommand() *cobra.Command {
 		if dir == "" {
 			dir = input.Name
 		}
+		if ciMode == "reference" && ciVersion == "" {
+			return fmt.Errorf("ci-version is required for reference mode; select a published runtime CI version")
+		}
 		if version == "" {
 			catalog, err := (GitSource{Options: a.Options}).FetchCatalog(cmd.Context())
 			if err != nil {
@@ -86,7 +89,9 @@ func (a *App) newCommand() *cobra.Command {
 		}
 		if ciMode == "reference" {
 			var err error
-			input.CIReference, err = a.FetchCIReference(cmd.Context(), ciRepository, ciVersion, ciProject, "")
+			input.CIReference, err = a.FetchCIReference(
+				cmd.Context(), ciRepository, ciVersion, ciProject, defaultCIRuntimeOverridesPath,
+			)
 			if err != nil {
 				return err
 			}
@@ -100,6 +105,14 @@ func (a *App) newCommand() *cobra.Command {
 		if !release.Creatable || release.Status != "active" {
 			return &ExitError{Code: ExitUnsupported, Err: fmt.Errorf("scaffold version %s is not creatable", release.Version)}
 		}
+		if ciMode == "reference" {
+			input.CIReference, err = a.FetchProjectCIReference(
+				cmd.Context(), ciRepository, ciProject, sourceDir, input.CIReference,
+			)
+			if err != nil {
+				return err
+			}
+		}
 		return a.CreateProject(cmd.Context(), sourceDir, release.Version, revision, dir, input, noGitInit, verify)
 	}}
 	command.Flags().StringVar(&input.Name, "name", "", "project name")
@@ -109,7 +122,7 @@ func (a *App) newCommand() *cobra.Command {
 	command.Flags().StringVar(&dir, "dir", "", "target directory, defaults to name")
 	command.Flags().BoolVar(&noGitInit, "no-git-init", false, "do not initialize a Git repository")
 	command.Flags().BoolVar(&verify, "verify", false, "run go test, go build and git diff --check")
-	command.Flags().StringVar(&ciMode, "ci-mode", "copy", "CI integration: copy (compatible default) or reference")
+	command.Flags().StringVar(&ciMode, "ci-mode", "reference", "CI integration: reference (default) or explicit legacy copy")
 	command.Flags().StringVar(&ciVersion, "ci-version", "", "published runtime CI version; required for reference mode")
 	command.Flags().StringVar(&ciProject, "ci-project", defaultCISourceProject, "GitLab shared CI project path")
 	command.Flags().StringVar(&ciRepository, "ci-repository", defaultCIRepository, "CI source repository for reference mode")

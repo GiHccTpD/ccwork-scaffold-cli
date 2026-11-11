@@ -72,9 +72,65 @@ func RenderProject(source, target string, input RenderInput) error {
 		return err
 	}
 	if len(input.CIReference) > 0 {
+		if err := EnsureCIRuntimeOverrides(target); err != nil {
+			return err
+		}
+		if err := ValidateCILocalIncludes(target, input.CIReference); err != nil {
+			return err
+		}
 		if err := os.WriteFile(filepath.Join(target, ".gitlab-ci.yml"), input.CIReference, 0o644); err != nil {
 			return fmt.Errorf("write runtime CI reference: %w", err)
 		}
+	}
+	return nil
+}
+
+// ValidateCILocalIncludes 防止渲染后仍引用缺失或越界的项目参数文件。
+func ValidateCILocalIncludes(target string, reference []byte) error {
+	var config struct {
+		Include []map[string]string `yaml:"include"`
+	}
+	if err := yaml.Unmarshal(reference, &config); err != nil {
+		return fmt.Errorf("parse runtime CI local includes: %w", err)
+	}
+	for _, include := range config.Include {
+		name, ok := include["local"]
+		if !ok {
+			continue
+		}
+		name = strings.TrimPrefix(name, "/")
+		if err := ValidateRelativePath(name); err != nil {
+			return fmt.Errorf("validate runtime CI local include: %w", err)
+		}
+		info, err := os.Stat(filepath.Join(target, name))
+		if err != nil {
+			return fmt.Errorf("inspect runtime CI local include %s: %w", name, err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("runtime CI local include %s must be a regular file", name)
+		}
+	}
+	return nil
+}
+
+// EnsureCIRuntimeOverrides 为旧模板补齐项目差异配置，保留已渲染的项目内容。
+func EnsureCIRuntimeOverrides(target string) error {
+	configPath := filepath.Join(target, defaultCIRuntimeOverridesPath)
+	info, err := os.Stat(configPath)
+	if err == nil {
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("runtime CI overrides must be a regular file")
+		}
+		return nil
+	}
+	if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect runtime CI overrides: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		return fmt.Errorf("create runtime CI overrides parent: %w", err)
+	}
+	if err := os.WriteFile(configPath, []byte(defaultCIRuntimeOverrides), 0o644); err != nil {
+		return fmt.Errorf("write runtime CI overrides: %w", err)
 	}
 	return nil
 }

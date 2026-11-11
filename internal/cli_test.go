@@ -384,7 +384,7 @@ func TestCommandNewFromAnnotatedTag(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "demo-service")
 	var output strings.Builder
 	command := NewCommand(&output, &output)
-	command.SetArgs([]string{"--repository", source, "--cache-dir", t.TempDir(), "new", "--name", "demo-service", "--module", "example.com/demo", "--dir", target, "--no-git-init", "--verify"})
+	command.SetArgs([]string{"--repository", source, "--cache-dir", t.TempDir(), "new", "--name", "demo-service", "--module", "example.com/demo", "--dir", target, "--no-git-init", "--ci-mode", "copy", "--verify"})
 	if err := command.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +399,7 @@ func TestCommandNewFromAnnotatedTag(t *testing.T) {
 	assertFileContains(t, filepath.Join(target, "main.go"), "app.NewApp()")
 	unverifiedTarget := filepath.Join(t.TempDir(), "demo-unverified")
 	command = NewCommand(&output, &output)
-	command.SetArgs([]string{"--repository", source, "--cache-dir", t.TempDir(), "new", "--name", "demo-unverified", "--module", "example.com/demo-unverified", "--dir", unverifiedTarget, "--no-git-init"})
+	command.SetArgs([]string{"--repository", source, "--cache-dir", t.TempDir(), "new", "--name", "demo-unverified", "--module", "example.com/demo-unverified", "--dir", unverifiedTarget, "--no-git-init", "--ci-mode", "copy"})
 	if err := command.Execute(); err != nil {
 		t.Fatal(err)
 	}

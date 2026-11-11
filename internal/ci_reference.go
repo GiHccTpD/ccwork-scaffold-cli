@@ -28,6 +28,19 @@ func (a *App) newCIReferenceCommand(repository *string) *cobra.Command {
 	return command
 }
 
+const defaultCIRuntimeOverridesPath = ".gitlab/ci-runtime-overrides.yml"
+
+// defaultCIRuntimeOverrides 只提供项目开关，不包含共享任务、规则或脚本。
+const defaultCIRuntimeOverrides = `# 项目差异配置；共享任务、规则和脚本来自固定 revision 的 ops-pipelines。
+variables:
+  TAG_PIPELINE_ENABLED: "false"
+  OPS_PIPELINES_READ_TOKEN: "$GITLAB_READ_TOKEN"
+  NOTIFIER_JOB_EVENTS: "true"
+  SECURITY_SYNC_SCHEDULES_ENABLED: "true"
+  RELEASE_NOTES_ENABLED: "false"
+  RELEASE_PUBLISH_ENABLED: "false"
+`
+
 // FetchCIReference 仅从已校验的正式来源生成同 SHA 的配置和资产引用。
 func (a *App) FetchCIReference(ctx context.Context, repository, version, project, localConfig string) ([]byte, error) {
 	// 🔍1.验证 GitLab 项目与可选配置路径，避免输出含凭据或越界的引用
@@ -84,6 +97,91 @@ func (a *App) FetchCIReference(ctx context.Context, repository, version, project
 	return append([]byte(hint), data...), nil
 }
 
+// FetchProjectCIReference 保留模板已有 runtime 模块和项目参数入口，并校验所选版本完整支持。
+func (a *App) FetchProjectCIReference(
+	ctx context.Context, repository, project, scaffoldDir string, generated []byte,
+) ([]byte, error) {
+	// 🔍1.旧副本入口由标准引用替换，已有薄入口则保留其模块边界
+	data, err := os.ReadFile(filepath.Join(scaffoldDir, ".gitlab-ci.yml"))
+	if os.IsNotExist(err) {
+		return generated, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read scaffold CI entry: %w", err)
+	}
+	type runtimeConfig struct {
+		Include   []map[string]string `yaml:"include"`
+		Variables map[string]string   `yaml:"variables"`
+		Other     map[string]any      `yaml:",inline"`
+	}
+	var existing, output runtimeConfig
+	if err := yaml.Unmarshal(data, &existing); err != nil || len(existing.Other) > 0 ||
+		len(existing.Include) == 0 || existing.Variables["OPS_PIPELINES_PROJECT"] == "" {
+		return generated, nil
+	}
+	if err := yaml.Unmarshal(generated, &output); err != nil {
+		return nil, fmt.Errorf("parse generated CI reference: %w", err)
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(existing.Variables["OPS_PIPELINES_REVISION"]) {
+		return nil, fmt.Errorf("scaffold CI reference must use a full revision")
+	}
+
+	// 📦2.共享模块使用同一正式 revision，缺失模块时拒绝生成而非静默移除
+	source, _, err := a.FetchCICatalog(ctx, repository)
+	if err != nil {
+		return nil, fmt.Errorf("resolve project runtime source: %w", err)
+	}
+	shared := []map[string]string{output.Include[0]}
+	local := []map[string]string{{"local": "/" + defaultCIRuntimeOverridesPath}}
+	seen := map[string]bool{"/runtime/go-security.yml": true, "/" + defaultCIRuntimeOverridesPath: true}
+	for _, include := range existing.Include {
+		if name, ok := include["local"]; ok {
+			if len(include) != 1 || !strings.HasPrefix(name, "/") {
+				return nil, fmt.Errorf("unsupported project CI include")
+			}
+			if err := ValidateRelativePath(strings.TrimPrefix(name, "/")); err != nil {
+				return nil, fmt.Errorf("validate project CI include: %w", err)
+			}
+			if !seen[name] {
+				local = append(local, map[string]string{"local": name})
+				seen[name] = true
+			}
+			continue
+		}
+		name := include["file"]
+		if len(include) != 3 || include["project"] != existing.Variables["OPS_PIPELINES_PROJECT"] ||
+			include["ref"] != existing.Variables["OPS_PIPELINES_REVISION"] ||
+			!strings.HasPrefix(name, "/runtime/") {
+			return nil, fmt.Errorf("scaffold runtime includes must share a project and revision")
+		}
+		if err := ValidateRelativePath(strings.TrimPrefix(name, "/")); err != nil {
+			return nil, fmt.Errorf("validate runtime CI module: %w", err)
+		}
+		if seen[name] {
+			continue
+		}
+		kind, err := source.FetchGit(ctx, source.Options.Repository, "cat-file", "-t",
+			output.Variables["OPS_PIPELINES_REVISION"]+":"+strings.TrimPrefix(name, "/"))
+		if err != nil || strings.TrimSpace(string(kind)) != "blob" {
+			return nil, &ExitError{Code: ExitUnsupported, Err: fmt.Errorf("selected CI does not provide required runtime module %s", name)}
+		}
+		shared = append(shared, map[string]string{
+			"project": project,
+			"ref":     output.Variables["OPS_PIPELINES_REVISION"],
+			"file":    name,
+		})
+		seen[name] = true
+	}
+
+	// 📝3.所有共享模块先加载，项目参数在其后覆盖，保持薄入口结构
+	output.Include = append(shared, local...)
+	result, err := yaml.Marshal(output)
+	if err != nil {
+		return nil, fmt.Errorf("render project runtime CI reference: %w", err)
+	}
+	return result, nil
+}
+
 // InspectCIReference 离线检查配置与资产 SHA 一致，真实权限和执行结果另行验收。
 func InspectCIReference(dir string) (*CIReport, error) {
 	data, err := os.ReadFile(filepath.Join(dir, ".gitlab-ci.yml"))
@@ -112,6 +210,12 @@ func InspectCIReference(dir string) (*CIReport, error) {
 	revision := reference["ref"]
 	if !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(revision) || config.Variables["OPS_PIPELINES_REVISION"] != revision || config.Variables["OPS_PIPELINES_PROJECT"] != reference["project"] {
 		return nil, &ExitError{Code: ExitConflict, Err: fmt.Errorf("runtime CI template and assets must reference the same full SHA and project")}
+	}
+	for _, include := range config.Include {
+		if strings.HasPrefix(include["file"], "/runtime/") &&
+			(include["ref"] != revision || include["project"] != reference["project"]) {
+			return nil, &ExitError{Code: ExitConflict, Err: fmt.Errorf("all shared runtime modules must reference the same full SHA and project")}
+		}
 	}
 	requirements := []string{
 		"仅核对本地引用；正式来源、合并配置、跨仓库权限及真实 Pipeline 尚需验收。",
